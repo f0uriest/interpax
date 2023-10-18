@@ -38,7 +38,7 @@ Contribute
     :target: https://github.com/f0uriest/interpax/actions/workflows/unittest.yml
     :alt: UnitTests
 
-.. |Codecov| image:: https://codecov.io/gh/f0uriest/interpax/branch/master/graph/badge.svg?token=5LDR4B1O7Z
+.. |Codecov| image:: https://codecov.io/github/f0uriest/interpax/graph/badge.svg?token=MB11I7WE3I
     :target: https://codecov.io/github/f0uriest/interpax
     :alt: Coverage
 
