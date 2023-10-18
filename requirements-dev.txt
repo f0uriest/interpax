@@ -1,5 +1,5 @@
 # standard install requirements
--r ../requirements.txt
+-r ./requirements.txt
 
 # building the docs
 sphinx > 3.0.0
