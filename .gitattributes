@@ -1,0 +1,3 @@
+*.ipynb -linguist-detectable
+documentation/* linguist-documentation
+interpax/_version.py export-subst

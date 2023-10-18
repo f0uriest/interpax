@@ -1,0 +1,27 @@
+# .readthedocs.yml
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+
+# Required
+version: 2
+
+# recommended to fix requests/urllib mismatch in https://github.com/readthedocs/readthedocs.org/issues/10290
+build:
+  os: ubuntu-22.04
+  tools:
+    python: "3.10"
+
+# Build documentation in the docs/ directory with Sphinx
+sphinx:
+  configuration: docs/conf.py
+  builder: html
+  fail_on_warning: true
+
+# Optionally build your docs in additional formats such as PDF
+# formats:
+#   - pdf
+
+# Optionally set the version of Python and requirements required to build your docs
+python:
+  install:
+    - requirements: requirements-dev.txt

@@ -1,0 +1,25 @@
+## Title: If applied, this commit will...[Add/Fix/Remove/Update/Refactor/Document] [summary]
+# No more than 50 chars. #### 50 chars is here: #
+
+# Remember blank line between title and body.
+
+# Body: Explain *what* and *why* (not *how*).
+# Wrap at 72 chars. ################################## which is here: #
+## Why is it necessary? (Bug fix, feature, improvements?)
+-
+## How does the change address the issue?
+-
+## What side effects does this change have?
+-
+
+## Does this commit resolve any issues? Reference them below with
+## Resolves #xx
+
+
+# 1.Separate subject from body with a blank line
+# 2. Limit the subject line to 50 characters
+# 3. Capitalize the subject line
+# 4. Do not end the subject line with a period
+# 5. Use the imperative mood in the subject line
+# 6. Wrap the body at 72 characters
+# 7. Use the body to explain what and why vs. how

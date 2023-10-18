@@ -1,0 +1,2 @@
+include versioneer.py
+include interpax/_version.py

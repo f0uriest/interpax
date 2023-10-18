@@ -1,0 +1,60 @@
+name: Unit tests
+
+on:
+  push:
+    branches:
+      - master
+      - dev
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - 'docs/**'
+      - 'devtools/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit_tests:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.10
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Test with pytest
+        run: |
+          pwd
+          lscpu
+          python -m pytest -v --durations=0 --cov-report xml:cov.xml --cov-config=setup.cfg --cov=interpax/ --db ./prof.db
+      - name: save coverage file and plot comparison results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: unit_test_artifact
+          path: |
+            ./cov.xml
+            ./prof.db
+      - name: Upload coverage
+        id : codecov
+        uses: Wandalen/wretry.action@v1.0.36
+        with:
+          action: codecov/codecov-action@v3
+          with: |
+            token: ${{ secrets.CODECOV_TOKEN }}
+            name: codecov-umbrella
+            files: ./cov.xml
+            fail_ci_if_error: true
+            verbose: true
+          attempt_limit: 10
+          attempt_delay: 60000 # ms, 1 min

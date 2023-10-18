@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: interpax
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file. To cite a specific version of interpax,
+  please cite the correct version from Zenodo at
+  https://zenodo.org/search?page=1&size=20&q=conceptrecid:%224876504%22&sort=-version&all_versions=True
+type: software
+authors:
+  - given-names: Rory
+    family-names: Conlin
+    email: wconlin@princeton.edu
+    affiliation: Princeton University
+    orcid: 'https://orcid.org/0000-0001-8366-2111'
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.4876504
+    description: 'Master DOI for interpax, points to latest release.'
+  - type: url
+    value: 'https://github.com/f0uriest/interpax'
+    description: 'Github repository for DESC'
+repository-code: 'https://github.com/f0uriest/interpax'
+url: 'https://desc-docs.readthedocs.io'
+repository-artifact: 'https://pypi.org/project/interpax/'
+license: MIT
