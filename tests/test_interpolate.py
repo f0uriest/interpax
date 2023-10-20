@@ -4,7 +4,16 @@ import numpy as np
 import pytest
 from jax.config import config as jax_config
 
-from interpax import fft_interp1d, fft_interp2d, interp1d, interp2d, interp3d
+from interpax import (
+    Interpolator1D,
+    Interpolator2D,
+    Interpolator3D,
+    fft_interp1d,
+    fft_interp2d,
+    interp1d,
+    interp2d,
+    interp3d,
+)
 
 jax_config.update("jax_enable_x64", True)
 
@@ -20,29 +29,33 @@ class TestInterp1D:
         f = lambda x: np.sin(x)
         fp = f(xp)
 
-        fq = interp1d(x, xp, fp, method="nearest")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-2, atol=1e-1)
+        interp1 = lambda xq, *args, **kwargs: interp1d(xq, *args, **kwargs)
+        interp2 = lambda xq, *args, **kwargs: Interpolator1D(*args, **kwargs)(xq)
 
-        fq = interp1d(x, xp, fp, method="linear")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
+        for interp in [interp1, interp2]:
+            fq = interp(x, xp, fp, method="nearest")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-2, atol=1e-1)
 
-        fq = interp1d(x, xp, fp, method="cubic")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
+            fq = interp(x, xp, fp, method="linear")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
 
-        fq = interp1d(x, xp, fp, method="cubic2")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
+            fq = interp(x, xp, fp, method="cubic")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
-        fq = interp1d(x, xp, fp, method="cardinal")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
+            fq = interp(x, xp, fp, method="cubic2")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
-        fq = interp1d(x, xp, fp, method="catmull-rom")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
+            fq = interp(x, xp, fp, method="cardinal")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
-        fq = interp1d(x, xp, fp, method="monotonic")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
+            fq = interp(x, xp, fp, method="catmull-rom")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
-        fq = interp1d(x, xp, fp, method="monotonic-0")
-        np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-2)
+            fq = interp(x, xp, fp, method="monotonic")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
+
+            fq = interp(x, xp, fp, method="monotonic-0")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-2)
 
     @pytest.mark.unit
     def test_interp1d_extrap_periodic(self):
@@ -95,27 +108,33 @@ class TestInterp2D:
         f = lambda x, y: np.sin(x) * np.cos(y)
         fp = f(xxp, yyp)
 
-        fq = interp2d(x, y, xp, yp, fp)
-        np.testing.assert_allclose(fq, f(x, y), rtol=1e-6, atol=1e-3)
+        interp1 = lambda xq, yq, *args, **kwargs: interp2d(xq, yq, *args, **kwargs)
+        interp2 = lambda xq, yq, *args, **kwargs: Interpolator2D(*args, **kwargs)(
+            xq, yq
+        )
 
-        fq = interp2d(x, y, xp, yp, fp, method="nearest")
-        np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1)
+        for interp in [interp1, interp2]:
+            fq = interp(x, y, xp, yp, fp)
+            np.testing.assert_allclose(fq, f(x, y), rtol=1e-6, atol=1e-3)
 
-        fq = interp2d(x, y, xp, yp, fp, method="linear")
-        np.testing.assert_allclose(fq, f(x, y), rtol=1e-4, atol=1e-2)
-        atol = 2e-3
-        rtol = 1e-5
-        fq = interp2d(x, y, xp, yp, fp, method="cubic")
-        np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
+            fq = interp(x, y, xp, yp, fp, method="nearest")
+            np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1)
 
-        fq = interp2d(x, y, xp, yp, fp, method="cubic2")
-        np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
+            fq = interp(x, y, xp, yp, fp, method="linear")
+            np.testing.assert_allclose(fq, f(x, y), rtol=1e-4, atol=1e-2)
+            atol = 2e-3
+            rtol = 1e-5
+            fq = interp(x, y, xp, yp, fp, method="cubic")
+            np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
-        fq = interp2d(x, y, xp, yp, fp, method="catmull-rom")
-        np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
+            fq = interp(x, y, xp, yp, fp, method="cubic2")
+            np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
-        fq = interp2d(x, y, xp, yp, fp, method="cardinal")
-        np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
+            fq = interp(x, y, xp, yp, fp, method="catmull-rom")
+            np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
+
+            fq = interp(x, y, xp, yp, fp, method="cardinal")
+            np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
 
 class TestInterp3D:
@@ -135,28 +154,36 @@ class TestInterp3D:
         f = lambda x, y, z: np.sin(x) * np.cos(y) * z**2
         fp = f(xxp, yyp, zzp)
 
-        fq = interp3d(x, y, z, xp, yp, zp, fp)
-        np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-5, atol=1e-2)
+        interp1 = lambda xq, yq, zq, *args, **kwargs: interp3d(
+            xq, yq, zq, *args, **kwargs
+        )
+        interp2 = lambda xq, yq, zq, *args, **kwargs: Interpolator3D(*args, **kwargs)(
+            xq, yq, zq
+        )
 
-        fq = interp3d(x, y, z, xp, yp, zp, fp, method="nearest")
-        np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=1)
+        for interp in [interp1, interp2]:
+            fq = interp(x, y, z, xp, yp, zp, fp)
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-5, atol=1e-2)
 
-        fq = interp3d(x, y, z, xp, yp, zp, fp, method="linear")
-        np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-3, atol=1e-1)
+            fq = interp(x, y, z, xp, yp, zp, fp, method="nearest")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=1)
 
-        atol = 5.5e-3
-        rtol = 1e-5
-        fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic")
-        np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
+            fq = interp(x, y, z, xp, yp, zp, fp, method="linear")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-3, atol=1e-1)
 
-        fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic2")
-        np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
+            atol = 5.5e-3
+            rtol = 1e-5
+            fq = interp(x, y, z, xp, yp, zp, fp, method="cubic")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
-        fq = interp3d(x, y, z, xp, yp, zp, fp, method="catmull-rom")
-        np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
+            fq = interp(x, y, z, xp, yp, zp, fp, method="cubic2")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
-        fq = interp3d(x, y, z, xp, yp, zp, fp, method="cardinal")
-        np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
+            fq = interp(x, y, z, xp, yp, zp, fp, method="catmull-rom")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
+
+            fq = interp(x, y, z, xp, yp, zp, fp, method="cardinal")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
 
 @pytest.mark.unit

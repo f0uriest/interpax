@@ -2,13 +2,34 @@
 API Documentation
 =================
 
-.. autosummary::
-    :toctree: _api/
-    :recursive:
-    :template: class.rst
+interp1d
+********
+.. autofunction:: interpax.interp1d
 
-    interpax.interp1d
-    interpax.interp2d
-    interpax.interp3d
-    interpax.fft_interp1d
-    interpax.fft_interp2d
+interp2d
+********
+.. autofunction:: interpax.interp2d
+
+interp3d
+********
+.. autofunction:: interpax.interp3d
+
+fft_interp1d
+************
+.. autofunction:: interpax.fft_interp1d
+
+fft_interp2d
+************
+.. autofunction:: interpax.fft_interp2d
+
+Interpolator1D
+**************
+.. autoclass:: interpax.Interpolator1D
+
+Interpolator2D
+**************
+.. autoclass:: interpax.Interpolator2D
+
+Interpolator3D
+**************
+.. autoclass:: interpax.Interpolator3D
