@@ -1,14 +1,25 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
-import numbers
 from collections import OrderedDict
+from functools import partial
 
+import jax
 import jax.numpy as jnp
 import numpy as np
+from jax import jit
+
+from .utils import errorif, isbool
+
+CUBIC_METHODS = ("cubic", "cubic2", "cardinal", "catmull-rom")
+OTHER_METHODS = ("nearest", "linear")
+METHODS_1D = CUBIC_METHODS + OTHER_METHODS + ("monotonic", "monotonic-0")
+METHODS_2D = CUBIC_METHODS + OTHER_METHODS
+METHODS_3D = CUBIC_METHODS + OTHER_METHODS
 
 
+@partial(jit, static_argnames="method")
 def interp1d(
-    xq, x, f, method="cubic", derivative=0, extrap=False, period=None, fx=None, **kwargs
+    xq, x, f, method="cubic", derivative=0, extrap=False, period=None, **kwargs
 ):
     """Interpolate a 1d function.
 
@@ -33,19 +44,16 @@ def interp1d(
             data, and will not introduce new extrema in the interpolated points
         - `'monotonic-0'`: same as `'monotonic'` but with 0 first derivatives at both
             endpoints
-    derivative : int
+    derivative : int >= 0
         derivative order to calculate
     extrap : bool, float, array-like
         whether to extrapolate values beyond knots (True) or return nan (False),
         or a specified value to return for query points outside the bounds. Can
         also be passed as a 2 element array or tuple to specify different conditions
         for xq<x[0] and x[-1]<xq
-    period : float, None
+    period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
-        on the interval [0,period]
-    fx : ndarray, shape(Nx,...)
-        specified derivatives at knot locations. If not supplied, calculated internally
-        using `method`. Only used for cubic interpolation
+        on the interval [0,period]. None denotes no periodicity
 
     Returns
     -------
@@ -54,52 +62,61 @@ def interp1d(
     """
     xq, x, f = map(jnp.asarray, (xq, x, f))
     axis = kwargs.get("axis", 0)
-    lowx, highx = np.broadcast_to(extrap, (2,))
+    fx = kwargs.pop("fx", None)
 
-    if fx is not None:
-        fx = jnp.asarray(fx)
-    if len(x) != f.shape[axis] or jnp.ndim(x) != 1:
-        raise ValueError("x and f must be arrays of equal length")
-    if fx is not None and fx.shape != f.shape:
-        raise ValueError(f"f and fx must have same shape, got {f.shape}, {fx.shape}")
-    if derivative < 0:
-        raise ValueError("derivative order should be non-negative")
-    if period not in [0, None]:
+    errorif(
+        (len(x) != f.shape[axis]) or (jnp.ndim(x) != 1),
+        ValueError,
+        "x and f must be arrays of equal length",
+    )
+    errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
+
+    lowx, highx = _parse_extrap(extrap, 1)
+
+    if period is not None:
         xq, x, f, fx = _make_periodic(xq, x, period, axis, f, fx)
         lowx = highx = True
 
     if method == "nearest":
-        if derivative == 0:
+
+        def derivative0():
             i = jnp.argmin(jnp.abs(xq[:, np.newaxis] - x[np.newaxis]), axis=1)
-            fq = f[i]
-        else:
-            fq = jnp.zeros((xq.size, *f.shape[1:]))
+            return f[i]
+
+        def derivative1():
+            return jnp.zeros((xq.size, *f.shape[1:]))
+
+        fq = jax.lax.switch(derivative, [derivative0, derivative1])
 
     elif method == "linear":
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-        df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
-        dx = x[i] - x[i - 1]
-        dxi = jnp.where(dx == 0, 0, 1 / dx)
-        delta = xq - x[i - 1]
-        if derivative == 0:
+
+        def derivative0():
+            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
+            df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
+            dx = x[i] - x[i - 1]
+            dxi = jnp.where(dx == 0, 0, 1 / dx)
+            delta = xq - x[i - 1]
             fq = jnp.where(
                 (dx == 0),
                 jnp.take(f, i, axis),
                 jnp.take(f, i - 1, axis) + delta * dxi * df,
             )
-        elif derivative == 1:
-            fq = df * dxi
-        else:
-            fq = jnp.zeros((xq.size, *f.shape[1:]))
+            return fq
 
-    elif method in [
-        "cubic",
-        "cubic2",
-        "cardinal",
-        "catmull-rom",
-        "monotonic",
-        "monotonic-0",
-    ]:
+        def derivative1():
+            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
+            df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
+            dx = x[i] - x[i - 1]
+            dxi = jnp.where(dx == 0, 0, 1 / dx)
+            return df * dxi
+
+        def derivative2():
+            return jnp.zeros((xq.size, *f.shape[1:]))
+
+        fq = jax.lax.switch(derivative, [derivative0, derivative1, derivative2])
+
+    elif method in (CUBIC_METHODS + ("monotonic", "monotonic-0")):
+
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
             fx = _approx_df(x, f, method, axis, **kwargs)
@@ -119,13 +136,11 @@ def interp1d(
         ttx = _get_t_der(t, derivative, dxi)
         fq = jnp.einsum("ij,ji...->i...", ttx, coef)
 
-    else:
-        raise ValueError(f"unknown method {method}")
-
-    fq = _extrap(xq, fq, x, f, lowx, highx, axis)
+    fq = _extrap(xq, fq, x, lowx, highx)
     return fq
 
 
+@partial(jit, static_argnames="method")
 def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq,
     yq,
@@ -136,9 +151,6 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     derivative=0,
     extrap=False,
     period=None,
-    fx=None,
-    fy=None,
-    fxy=None,
     **kwargs,
 ):
     """Interpolate a 2d function.
@@ -164,28 +176,18 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         - `'catmull-rom'`: C1 cubic centripetal "tension" splines
         - `'cardinal'`: c1 cubic general tension splines. If used, can also pass keyword
             parameter `c` in float[0,1] to specify tension
-    derivative : int, array-like
-        derivative order to calculate, scalar values uses the same order for all
-        coordinates, or pass a 2 element array or tuple to specify different derivatives
-        in x,y directions
+    derivative : int >= 0 or array-like, shape(2,)
+        derivative order to calculate in x, y. Use a single value for the same in both
+        directions.
     extrap : bool, float, array-like
         whether to extrapolate values beyond knots (True) or return nan (False),
         or a specified value to return for query points outside the bounds. Can
         also be passed as an array or tuple to specify different conditions
         [[xlow, xhigh],[ylow,yhigh]]
-    period : float, None, array-like
-        periodicity of the function. If given, function is assumed to be periodic
-        on the interval [0,period]. Pass a 2 element array or tuple to specify different
-        periods for x and y coordinates
-    fx : ndarray, shape(Nx,Ny,...)
-        specified x derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fy : ndarray, shape(Nx,Ny,...)
-        specified y derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fxy : ndarray, shape(Nx,Ny,...)
-        specified mixed derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
+    period : float > 0, None, array-like, shape(2,)
+        periodicity of the function in x, y directions. None denotes no periodicity,
+        otherwise function is assumed to be periodic on the interval [0,period]. Use a
+        single value for the same in both directions.
 
     Returns
     -------
@@ -193,32 +195,50 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         function value at query points
     """
     xq, yq, x, y, f = map(jnp.asarray, (xq, yq, x, y, f))
-    period, extrap = map(np.asarray, (period, extrap))
-    if len(x) != f.shape[0] or x.ndim != 1:
-        raise ValueError("x and f must be arrays of equal length")
-    if len(y) != f.shape[1] or y.ndim != 1:
-        raise ValueError("y and f must be arrays of equal length")
+    fx = kwargs.pop("fx", None)
+    fy = kwargs.pop("fy", None)
+    fxy = kwargs.pop("fxy", None)
+    xq, yq = jnp.broadcast_arrays(xq, yq)
 
-    periodx, periody = np.broadcast_to(period, (2,))
-    derivative_x, derivative_y = np.broadcast_to(derivative, (2,))
-    lowx, highx, lowy, highy = np.broadcast_to(extrap, (2, 2)).flatten()
+    errorif(
+        (len(x) != f.shape[0]) or (x.ndim != 1),
+        ValueError,
+        "x and f must be arrays of equal length",
+    )
+    errorif(
+        (len(y) != f.shape[1]) or (y.ndim != 1),
+        ValueError,
+        "y and f must be arrays of equal length",
+    )
+    errorif(method not in METHODS_2D, ValueError, f"unknown method {method}")
 
-    if periodx not in [0, None]:
+    periodx, periody = _parse_ndarg(period, 2)
+    derivative_x, derivative_y = _parse_ndarg(derivative, 2)
+    lowx, highx, lowy, highy = _parse_extrap(extrap, 2)
+
+    if periodx is not None:
         xq, x, f, fx, fy, fxy = _make_periodic(xq, x, periodx, 0, f, fx, fy, fxy)
         lowx = highx = True
-    if periody not in [0, None]:
+    if periody is not None:
         yq, y, f, fx, fy, fxy = _make_periodic(yq, y, periody, 1, f, fx, fy, fxy)
         lowy = highy = True
 
     if method == "nearest":
-        if derivative_x in [0, None] and derivative_y in [0, None]:
+
+        def derivative0():
             i = jnp.argmin(jnp.abs(xq[:, np.newaxis] - x[np.newaxis]), axis=1)
             j = jnp.argmin(jnp.abs(yq[:, np.newaxis] - y[np.newaxis]), axis=1)
-            fq = f[i, j]
-        else:
-            fq = jnp.zeros((xq.size, yq.size, *f.shape[2:]))
+            return f[i, j]
+
+        def derivative1():
+            return jnp.zeros((xq.size, *f.shape[2:]))
+
+        fq = jax.lax.cond(
+            (derivative_x == 0) & (derivative_y == 0), derivative0, derivative1
+        )
 
     elif method == "linear":
+
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
 
@@ -234,22 +254,21 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         dy = y1 - y0
         dyi = jnp.where(dy == 0, 0, 1 / dy)
-        if derivative_x in [0, None]:
-            tx = jnp.array([x1 - xq, xq - x0])
-        elif derivative_x == 1:
-            tx = jnp.array([-jnp.ones_like(xq), jnp.ones_like(xq)])
-        else:
-            tx = jnp.zeros((2, xq.size))
-        if derivative_y in [0, None]:
-            ty = jnp.array([y1 - yq, yq - y0])
-        elif derivative_y == 1:
-            ty = jnp.array([-jnp.ones_like(yq), jnp.ones_like(yq)])
-        else:
-            ty = jnp.zeros((2, yq.size))
+
+        dx0 = lambda: jnp.array([x1 - xq, xq - x0])
+        dx1 = lambda: jnp.array([-jnp.ones_like(xq), jnp.ones_like(xq)])
+        dx2 = lambda: jnp.zeros((2, xq.size))
+        dy0 = lambda: jnp.array([y1 - yq, yq - y0])
+        dy1 = lambda: jnp.array([-jnp.ones_like(yq), jnp.ones_like(yq)])
+        dy2 = lambda: jnp.zeros((2, yq.size))
+
+        tx = jax.lax.switch(derivative_x, [dx0, dx1, dx2])
+        ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
         F = jnp.array([[f00, f01], [f10, f11]])
         fq = dxi * dyi * jnp.einsum("ik,ijk,jk->k", tx, F, ty)
 
-    elif method in ["cubic", "cubic2", "cardinal", "catmull-rom"]:
+    elif method in CUBIC_METHODS:
+
         if fx is None:
             fx = _approx_df(x, f, method, 0, **kwargs)
         if fy is None:
@@ -285,24 +304,19 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
                         fsq[ff + str(ii) + str(jj)] *= dy
 
         F = jnp.vstack([foo for foo in fsq.values()])
-
         coef = jnp.matmul(A_BICUBIC, F)
-
         coef = jnp.moveaxis(coef.reshape((4, 4, -1), order="F"), -1, 0)
-
         ttx = _get_t_der(tx, derivative_x, dxi)
         tty = _get_t_der(ty, derivative_y, dyi)
         fq = jnp.einsum("ij,ijk...,ik->i...", ttx, coef, tty)
 
-    else:
-        raise ValueError(f"unknown method {method}")
-
-    fq = _extrap(xq, fq, x, f, lowx, highx, axis=0)
-    fq = _extrap(yq, fq, y, f, lowy, highy, axis=1)
+    fq = _extrap(xq, fq, x, lowx, highx)
+    fq = _extrap(yq, fq, y, lowy, highy)
 
     return fq
 
 
+@partial(jit, static_argnames="method")
 def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq,
     yq,
@@ -314,14 +328,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     method="cubic",
     derivative=0,
     extrap=False,
-    period=0,
-    fx=None,
-    fy=None,
-    fz=None,
-    fxy=None,
-    fxz=None,
-    fyz=None,
-    fxyz=None,
+    period=None,
     **kwargs,
 ):
     """Interpolate a 3d function.
@@ -351,40 +358,18 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         - `'catmull-rom'`: C1 cubic centripetal "tension" splines
         - `'cardinal'`: c1 cubic general tension splines. If used, can also pass keyword
             parameter `c` in float[0,1] to specify tension
-    derivative : int, array-like
-        derivative order to calculate, scalar values uses the same order for all
-        coordinates, or pass a 3 element array or tuple to specify different derivatives
-        in x,y,z directions
+    derivative : int >= 0, array-like, shape(3,)
+        derivative order to calculate in x,y,z directions. Use a single value for the
+        same in all directions.
     extrap : bool, float, array-like
         whether to extrapolate values beyond knots (True) or return nan (False),
         or a specified value to return for query points outside the bounds. Can
         also be passed as an array or tuple to specify different conditions for
         [[xlow, xhigh],[ylow,yhigh],[zlow,zhigh]]
-    period : float, None, array-like
-        periodicity of the function. If given, function is assumed to be periodic
-        on the interval [0,period]. Pass a 3 element array or tuple to specify different
-        periods for x,y,z coordinates
-    fx : ndarray, shape(Nx,Ny,Nz,...)
-        specified x derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fy : ndarray, shape(Nx,Ny,Nz,...)
-        specified y derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fz : ndarray, shape(Nx,Ny,Nz,...)
-        specified z derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fxy : ndarray, shape(Nx,Ny,Nz,...)
-        specified mixed derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fxz : ndarray, shape(Nx,Ny,Nz,...)
-        specified mixed derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fyz : ndarray, shape(Nx,Ny,Nz,...)
-        specified mixed derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
-    fxyz : ndarray, shape(Nx,Ny,Nz,...)
-        specified mixed derivatives at knot locations. If not supplied, calculated
-        internally using `method`. Only used for cubic interpolation
+    period : float > 0, None, array-like, shape(3,)
+        periodicity of the function in x, y, z directions. None denotes no periodicity,
+        otherwise function is assumed to be periodic on the interval [0,period]. Use a
+        single value for the same in all directions.
 
     Returns
     -------
@@ -392,53 +377,72 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         function value at query points
     """
     xq, yq, zq, x, y, z, f = map(jnp.asarray, (xq, yq, zq, x, y, z, f))
-    period, extrap = map(np.asarray, (period, extrap))
-    if len(x) != f.shape[0] or x.ndim != 1:
-        raise ValueError("x and f must be arrays of equal length")
-    if len(y) != f.shape[1] or y.ndim != 1:
-        raise ValueError("y and f must be arrays of equal length")
-    if len(z) != f.shape[2] or z.ndim != 1:
-        raise ValueError("z and f must be arrays of equal length")
-
-    periodx, periody, periodz = np.broadcast_to(
-        np.where(period == None, 0, period), (3,)  # noqa: E711
+    errorif(
+        (len(x) != f.shape[0]) or (x.ndim != 1),
+        ValueError,
+        "x and f must be arrays of equal length",
     )
-
-    derivative_x, derivative_y, derivative_z = np.broadcast_to(
-        np.where(derivative == None, 0, derivative), (3,)  # noqa: E711
+    errorif(
+        (len(y) != f.shape[1]) or (y.ndim != 1),
+        ValueError,
+        "y and f must be arrays of equal length",
     )
-    lowx, highx, lowy, highy, lowz, highz = np.broadcast_to(extrap, (3, 2)).flatten()
+    errorif(
+        (len(z) != f.shape[2]) or (z.ndim != 1),
+        ValueError,
+        "z and f must be arrays of equal length",
+    )
+    errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
 
-    if periodx not in [0, None]:
+    xq, yq, zq = jnp.broadcast_arrays(xq, yq, zq)
+
+    fx = kwargs.pop("fx", None)
+    fy = kwargs.pop("fy", None)
+    fz = kwargs.pop("fz", None)
+    fxy = kwargs.pop("fxy", None)
+    fxz = kwargs.pop("fxz", None)
+    fyz = kwargs.pop("fyz", None)
+    fxyz = kwargs.pop("fxyz", None)
+
+    periodx, periody, periodz = _parse_ndarg(period, 3)
+    derivative_x, derivative_y, derivative_z = _parse_ndarg(derivative, 3)
+    lowx, highx, lowy, highy, lowz, highz = _parse_extrap(extrap, 3)
+
+    if periodx is not None:
         xq, x, f, fx, fy, fz, fxy, fxz, fyz, fxyz = _make_periodic(
             xq, x, periodx, 0, f, fx, fy, fz, fxy, fxz, fyz, fxyz
         )
         lowx = highx = True
-    if periody not in [0, None]:
+    if periody is not None:
         yq, y, f, fx, fy, fz, fxy, fxz, fyz, fxyz = _make_periodic(
             yq, y, periody, 1, f, fx, fy, fz, fxy, fxz, fyz, fxyz
         )
         lowy = highy = True
-    if periodz not in [0, None]:
+    if periodz is not None:
         zq, z, f, fx, fy, fz, fxy, fxz, fyz, fxyz = _make_periodic(
             zq, z, periodz, 2, f, fx, fy, fz, fxy, fxz, fyz, fxyz
         )
         lowz = highz = True
 
     if method == "nearest":
-        if (
-            derivative_x in [0, None]
-            and derivative_y in [0, None]
-            and derivative_z in [0, None]
-        ):
+
+        def derivative0():
             i = jnp.argmin(jnp.abs(xq[:, np.newaxis] - x[np.newaxis]), axis=1)
             j = jnp.argmin(jnp.abs(yq[:, np.newaxis] - y[np.newaxis]), axis=1)
             k = jnp.argmin(jnp.abs(zq[:, np.newaxis] - z[np.newaxis]), axis=1)
-            fq = f[i, j, k]
-        else:
-            fq = jnp.zeros((xq.size, yq.size, zq.size, *f.shape[3:]))
+            return f[i, j, k]
+
+        def derivative1():
+            return jnp.zeros((xq.size, *f.shape[3:]))
+
+        fq = jax.lax.cond(
+            (derivative_x == 0) & (derivative_y == 0) & (derivative_z == 0),
+            derivative0,
+            derivative1,
+        )
 
     elif method == "linear":
+
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
         k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
@@ -463,28 +467,25 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         dyi = jnp.where(dy == 0, 0, 1 / dy)
         dz = z1 - z0
         dzi = jnp.where(dz == 0, 0, 1 / dz)
-        if derivative_x in [0, None]:
-            tx = jnp.array([x1 - xq, xq - x0])
-        elif derivative_x == 1:
-            tx = jnp.array([-jnp.ones_like(xq), jnp.ones_like(xq)])
-        else:
-            tx = jnp.zeros((2, xq.size))
-        if derivative_y in [0, None]:
-            ty = jnp.array([y1 - yq, yq - y0])
-        elif derivative_y == 1:
-            ty = jnp.array([-jnp.ones_like(yq), jnp.ones_like(yq)])
-        else:
-            ty = jnp.zeros((2, yq.size))
-        if derivative_z in [0, None]:
-            tz = jnp.array([z1 - zq, zq - z0])
-        elif derivative_z == 1:
-            tz = jnp.array([-jnp.ones_like(zq), jnp.ones_like(zq)])
-        else:
-            tz = jnp.zeros((2, zq.size))
+
+        dx0 = lambda: jnp.array([x1 - xq, xq - x0])
+        dx1 = lambda: jnp.array([-jnp.ones_like(xq), jnp.ones_like(xq)])
+        dx2 = lambda: jnp.zeros((2, xq.size))
+        dy0 = lambda: jnp.array([y1 - yq, yq - y0])
+        dy1 = lambda: jnp.array([-jnp.ones_like(yq), jnp.ones_like(yq)])
+        dy2 = lambda: jnp.zeros((2, yq.size))
+        dz0 = lambda: jnp.array([z1 - zq, zq - z0])
+        dz1 = lambda: jnp.array([-jnp.ones_like(zq), jnp.ones_like(zq)])
+        dz2 = lambda: jnp.zeros((2, zq.size))
+
+        tx = jax.lax.switch(derivative_x, [dx0, dx1, dx2])
+        ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
+        tz = jax.lax.switch(derivative_z, [dz0, dz1, dz2])
+
         F = jnp.array([[[f000, f010], [f100, f110]], [[f001, f011], [f101, f111]]])
         fq = dxi * dyi * dzi * jnp.einsum("il,ijkl,jl,kl->l", tx, F, ty, tz)
 
-    elif method in ["cubic", "cubic2", "cardinal", "catmull-rom"]:
+    elif method in CUBIC_METHODS:
         if fx is None:
             fx = _approx_df(x, f, method, 0, **kwargs)
         if fy is None:
@@ -544,30 +545,23 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
                             fsq[ff + str(ii) + str(jj) + str(kk)] *= dz
 
         F = jnp.vstack([foo for foo in fsq.values()])
-
         coef = jnp.matmul(A_TRICUBIC, F)
-
         coef = jnp.moveaxis(coef.reshape((4, 4, 4, -1), order="F"), -1, 0)
-
         ttx = _get_t_der(tx, derivative_x, dxi)
         tty = _get_t_der(ty, derivative_y, dyi)
         ttz = _get_t_der(tz, derivative_z, dzi)
         fq = jnp.einsum("lijk...,li,lj,lk->l...", coef, ttx, tty, ttz)
 
-    else:
-        raise ValueError(f"unknown method {method}")
-
-    fq = _extrap(xq, fq, x, f, lowx, highx, axis=0)
-    fq = _extrap(yq, fq, y, f, lowy, highy, axis=1)
-    fq = _extrap(zq, fq, z, f, lowz, highz, axis=2)
+    fq = _extrap(xq, fq, x, lowx, highx)
+    fq = _extrap(yq, fq, y, lowy, highy)
+    fq = _extrap(zq, fq, z, lowz, highz)
 
     return fq
 
 
+@partial(jit, static_argnames=("axis"))
 def _make_periodic(xq, x, period, axis, *arrs):
     """Make arrays periodic along a specified axis."""
-    if period == 0:
-        raise ValueError(f"period must be a non-zero value; got {period}")
     period = abs(period)
     xq = xq % period
     x = x % period
@@ -589,53 +583,84 @@ def _make_periodic(xq, x, period, axis, *arrs):
     return (xq, x, *arrs)
 
 
+@jit
 def _get_t_der(t, derivative, dxi):
     """Get arrays of [1,t,t^2,t^3] for cubic interpolation."""
-    assert int(derivative) == derivative, "derivative must be an integer"
-    if derivative == 0 or derivative is None:
-        tt = jnp.array([jnp.ones_like(t), t, t**2, t**3]).T
-    elif derivative == 1:
-        tt = (
-            jnp.array([jnp.zeros_like(t), jnp.ones_like(t), 2 * t, 3 * t**2]).T
-            * dxi[:, np.newaxis]
-        )
-    elif derivative == 2:
-        tt = (
-            jnp.array(
-                [jnp.zeros_like(t), jnp.zeros_like(t), 2 * jnp.ones_like(t), 6 * t]
-            ).T
-            * dxi[:, np.newaxis] ** 2
-        )
-    elif derivative == 3:
-        tt = (
-            jnp.array(
-                [
-                    jnp.zeros_like(t),
-                    jnp.zeros_like(t),
-                    jnp.zeros_like(t),
-                    6 * jnp.ones_like(t),
-                ]
-            ).T
-            * dxi[:, np.newaxis] ** 3
-        )
+    t0 = jnp.zeros_like(t)
+    t1 = jnp.ones_like(t)
+    dxi = dxi[:, None]
+    # derivatives of monomials
+    d0 = lambda: jnp.array([t1, t, t**2, t**3]).T
+    d1 = lambda: jnp.array([t0, t1, 2 * t, 3 * t**2]).T * dxi
+    d2 = lambda: jnp.array([t0, t0, 2 * t1, 6 * t]).T * dxi**2
+    d3 = lambda: jnp.array([t0, t0, t0, 6 * t1]).T * dxi**3
+    d4 = lambda: jnp.array([t0, t0, t0, t0]).T
+
+    return jax.lax.switch(derivative, [d0, d1, d2, d3, d4])
+
+
+def _parse_ndarg(arg, n):
+    try:
+        k = len(arg)
+    except TypeError:
+        arg = tuple(arg for _ in range(n))
+        k = n
+    assert k == n, "got too many args"
+    return arg
+
+
+def _parse_extrap(extrap, n):
+    if isbool(extrap):  # same for lower,upper in all dimensions
+        return tuple(extrap for _ in range(2 * n))
+    elif len(extrap) == 2 and jnp.isscalar(extrap[0]):  # same l,h for all dimensions
+        return tuple(e for _ in range(n) for e in extrap)
+    elif len(extrap) == n and all(len(extrap[i]) == 2 for i in range(n)):
+        return tuple(eij for ei in extrap for eij in ei)
     else:
-        tt = jnp.array(
-            [jnp.zeros_like(t), jnp.zeros_like(t), jnp.zeros_like(t), jnp.zeros_like(t)]
-        ).T
-    return tt
+        raise ValueError(
+            "extrap should either be a scalar, 2 element sequence (lo, hi), "
+            + "or a sequence with 2 elements for each dimension"
+        )
 
 
-def _extrap(xq, fq, x, f, low, high, axis=0):
+@jit
+def _extrap(xq, fq, x, lo, hi):
     """Clamp or extrapolate values outside bounds."""
-    if isinstance(low, numbers.Number) or (not low):
-        low = low if isinstance(low, numbers.Number) else np.nan
-        fq = jnp.where(xq < x[0], low, fq)
-    if isinstance(high, numbers.Number) or (not high):
-        high = high if isinstance(high, numbers.Number) else np.nan
-        fq = jnp.where(xq > x[-1], high, fq)
+
+    def loclip(fq, lo):
+        # lo is either False (no extrapolation) or a fixed value to fill in
+        if isbool(lo):
+            lo = jnp.nan
+        return jnp.where(xq < x[0], lo, fq)
+
+    def hiclip(fq, hi):
+        # hi is either False (no extrapolation) or a fixed value to fill in
+        if isbool(hi):
+            hi = jnp.nan
+        return jnp.where(xq > x[-1], hi, fq)
+
+    def noclip(fq, *_):
+        return fq
+
+    fq = jax.lax.cond(
+        isbool(lo) & lo,
+        noclip,
+        loclip,
+        fq,
+        lo,
+    )
+    fq = jax.lax.cond(
+        isbool(hi) & hi,
+        noclip,
+        hiclip,
+        fq,
+        hi,
+    )
+
     return fq
 
 
+@partial(jit, static_argnames=("method", "axis"))
 def _approx_df(x, f, method, axis, **kwargs):
     """Approximates derivatives for cubic spline interpolation."""
     if method == "cubic":
@@ -660,6 +685,7 @@ def _approx_df(x, f, method, axis, **kwargs):
             axis=axis,
         )
         return fx
+
     elif method == "cubic2":
         dx = jnp.diff(x)
         df = jnp.diff(f, axis=axis)
@@ -703,6 +729,7 @@ def _approx_df(x, f, method, axis, **kwargs):
         fx = jnp.linalg.solve(A, b)
         fx = jnp.moveaxis(fx.reshape(f.shape), 0, axis)
         return fx
+
     elif method in ["cardinal", "catmull-rom"]:
         dx = x[2:] - x[:-2]
         df = jnp.take(f, jnp.arange(2, f.shape[axis]), axis, mode="wrap") - jnp.take(
@@ -713,30 +740,22 @@ def _approx_df(x, f, method, axis, **kwargs):
             dxi = jnp.expand_dims(dxi, tuple(range(1, df.ndim)))
             dxi = jnp.moveaxis(dxi, 0, axis)
         df = dxi * df
-        fx0 = (
-            (
-                jnp.take(f, jnp.array([1]), axis, mode="wrap")
-                - jnp.take(f, jnp.array([0]), axis, mode="wrap")
-            )
-            / (x[(1,)] - x[(0,)])
-            if x[0] != x[1]
-            else jnp.zeros_like(jnp.take(f, jnp.array([0]), axis, mode="wrap"))
+        fx0 = jnp.take(f, jnp.array([1]), axis, mode="wrap") - jnp.take(
+            f, jnp.array([0]), axis, mode="wrap"
         )
-        fx1 = (
-            (
-                jnp.take(f, jnp.array([-1]), axis, mode="wrap")
-                - jnp.take(f, jnp.array([-2]), axis, mode="wrap")
-            )
-            / (x[(-1,)] - x[(-2,)])
-            if x[-1] != x[-2]
-            else jnp.zeros_like(jnp.take(f, jnp.array([0]), axis, mode="wrap"))
+        fx0 *= jnp.where(x[0] == x[1], 0, 1 / (x[1] - x[0]))
+        fx1 = jnp.take(f, jnp.array([-1]), axis, mode="wrap") - jnp.take(
+            f, jnp.array([-2]), axis, mode="wrap"
         )
+        fx1 *= jnp.where(x[-1] == x[-2], 0, 1 / (x[-1] - x[-2]))
+
         if method == "cardinal":
             c = kwargs.get("c", 0)
         else:
             c = 0
         fx = (1 - c) * jnp.concatenate([fx0, df, fx1], axis=axis)
         return fx
+
     elif method in ["monotonic", "monotonic-0"]:
         f = jnp.moveaxis(f, axis, 0)
         fshp = f.shape
@@ -795,9 +814,10 @@ def _approx_df(x, f, method, axis, **kwargs):
             d0 = _edge_case(hk[0, :], hk[1, :], mk[0, :], mk[1, :])[None]
             d1 = _edge_case(hk[-1, :], hk[-2, :], mk[-1, :], mk[-2, :])[None]
 
-        dk = np.concatenate([d0, dk, d1])
+        dk = jnp.concatenate([d0, dk, d1])
         dk = dk.reshape(fshp)
         return dk.reshape(fshp)
+
     else:  # method passed in does not use df from this function, just return 0
         return jnp.zeros_like(f)
 
