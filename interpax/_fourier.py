@@ -1,6 +1,10 @@
+from functools import partial
+
 import jax.numpy as jnp
+from jax import jit
 
 
+@partial(jit, static_argnames="n")
 def fft_interp1d(f, n, sx=None, dx=1):
     """Interpolation of a 1d periodic function via FFT.
 
@@ -33,6 +37,7 @@ def fft_interp1d(f, n, sx=None, dx=1):
     return jnp.fft.fft(c, axis=0).real
 
 
+@partial(jit, static_argnames=("n1", "n2"))
 def fft_interp2d(f, n1, n2, sx=None, sy=None, dx=1, dy=1):
     """Interpolation of a 2d periodic function via FFT.
 

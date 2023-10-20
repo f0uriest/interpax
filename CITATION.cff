@@ -18,8 +18,8 @@ identifiers:
     description: 'Master DOI for interpax, points to latest release.'
   - type: url
     value: 'https://github.com/f0uriest/interpax'
-    description: 'Github repository for DESC'
+    description: 'Github repository for interpax'
 repository-code: 'https://github.com/f0uriest/interpax'
-url: 'https://desc-docs.readthedocs.io'
+url: 'https://interpax.readthedocs.io'
 repository-artifact: 'https://pypi.org/project/interpax/'
 license: MIT

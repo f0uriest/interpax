@@ -14,6 +14,18 @@ in 1, 2, and 3 dimensions, as well as Fourier interpolation for periodic functio
 
 TODO: RBF interpolation for unstructured N-D data
 
+
+Installation
+============
+
+interpax is installable with `pip`:
+
+.. code-block:: console
+
+    pip install interpax
+
+
+
 Contribute
 ==========
 

@@ -33,17 +33,19 @@ def interp1d(
         function values to interpolate
     method : str
         method of interpolation
-        - `'nearest'`: nearest neighbor interpolation
-        - `'linear'`: linear interpolation
-        - `'cubic'`: C1 cubic splines (aka local splines)
-        - `'cubic2'`: C2 cubic splines (aka natural splines)
-        - `'catmull-rom'`: C1 cubic centripetal "tension" splines
-        - `'cardinal'`: C1 cubic general tension splines. If used, can also pass keyword
-            parameter `c` in float[0,1] to specify tension
-        - `'monotonic'`: C1 cubic splines that attempt to preserve monotonicity in the
-            data, and will not introduce new extrema in the interpolated points
-        - `'monotonic-0'`: same as `'monotonic'` but with 0 first derivatives at both
-            endpoints
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: linear interpolation
+        - ``'cubic'``: C1 cubic splines (aka local splines)
+        - ``'cubic2'``: C2 cubic splines (aka natural splines)
+        - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
+        - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
+          keyword parameter ``c`` in float[0,1] to specify tension
+        - ``'monotonic'``: C1 cubic splines that attempt to preserve monotonicity in the
+          data, and will not introduce new extrema in the interpolated points
+        - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
+          both endpoints
+
     derivative : int >= 0
         derivative order to calculate
     extrap : bool, float, array-like
@@ -169,13 +171,15 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         function values to interpolate
     method : str
         method of interpolation
-        - `'nearest'`: nearest neighbor interpolation
-        - `'linear'`: linear interpolation
-        - `'cubic'`: C1 cubic splines (aka local splines)
-        - `'cubic2'`: C2 cubic splines (aka natural splines)
-        - `'catmull-rom'`: C1 cubic centripetal "tension" splines
-        - `'cardinal'`: c1 cubic general tension splines. If used, can also pass keyword
-            parameter `c` in float[0,1] to specify tension
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: linear interpolation
+        - ``'cubic'``: C1 cubic splines (aka local splines)
+        - ``'cubic2'``: C2 cubic splines (aka natural splines)
+        - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
+        - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
+          keyword parameter ``c`` in float[0,1] to specify tension
+
     derivative : int >= 0 or array-like, shape(2,)
         derivative order to calculate in x, y. Use a single value for the same in both
         directions.
@@ -351,13 +355,15 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         function values to interpolate
     method : str
         method of interpolation
-        - `'nearest'`: nearest neighbor interpolation
-        - `'linear'`: linear interpolation
-        - `'cubic'`: C1 cubic splines (aka local splines)
-        - `'cubic2'`: C2 cubic splines (aka natural splines)
-        - `'catmull-rom'`: C1 cubic centripetal "tension" splines
-        - `'cardinal'`: c1 cubic general tension splines. If used, can also pass keyword
-            parameter `c` in float[0,1] to specify tension
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: linear interpolation
+        - ``'cubic'``: C1 cubic splines (aka local splines)
+        - ``'cubic2'``: C2 cubic splines (aka natural splines)
+        - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
+        - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
+          keyword parameter ``c`` in float[0,1] to specify tension
+
     derivative : int >= 0, array-like, shape(3,)
         derivative order to calculate in x,y,z directions. Use a single value for the
         same in all directions.
