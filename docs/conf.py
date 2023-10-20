@@ -99,7 +99,7 @@ def linkcode_resolve(domain, info):
 
     except subprocess.CalledProcessError:
         print("Failed to get head")  # so no head?
-        blob = "master"
+        blob = "main"
 
     linkcode_url = r"https://github.com/f0uriest/interpax/"
     linkcode_url = linkcode_url.strip("/") + f"/blob/{blob}/"
@@ -149,7 +149,7 @@ napoleon_google_docstring = False
 napoleon_numpy_docstring = True
 napoleon_include_init_with_doc = False
 napoleon_include_private_with_doc = False
-napoleon_include_special_with_doc = False
+napoleon_include_special_with_doc = True
 napoleon_use_admonition_for_examples = False
 napoleon_use_admonition_for_notes = False
 napoleon_use_admonition_for_references = False
@@ -157,9 +157,11 @@ napoleon_use_ivar = False
 napoleon_use_param = True
 napoleon_use_rtype = False
 
-autosummary_generate = True
-autosummary_generate_overwrite = True
-
+autodoc_default_options = {
+    "member-order": "bysource",
+    "special-members": "__call__",
+    "exclude-members": "__init__",
+}
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
 

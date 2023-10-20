@@ -3,6 +3,7 @@
 from collections import OrderedDict
 from functools import partial
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,6 +16,363 @@ OTHER_METHODS = ("nearest", "linear")
 METHODS_1D = CUBIC_METHODS + OTHER_METHODS + ("monotonic", "monotonic-0")
 METHODS_2D = CUBIC_METHODS + OTHER_METHODS
 METHODS_3D = CUBIC_METHODS + OTHER_METHODS
+
+
+class Interpolator1D(eqx.Module):
+    """Convenience class for representing a 1D interpolated function.
+
+    Parameters
+    ----------
+    x : ndarray, shape(Nx,)
+        coordinates of known function values ("knots")
+    f : ndarray, shape(Nx,...)
+        function values to interpolate
+    method : str
+        method of interpolation
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: linear interpolation
+        - ``'cubic'``: C1 cubic splines (aka local splines)
+        - ``'cubic2'``: C2 cubic splines (aka natural splines)
+        - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
+        - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
+          keyword parameter ``c`` in float[0,1] to specify tension
+        - ``'monotonic'``: C1 cubic splines that attempt to preserve monotonicity in the
+          data, and will not introduce new extrema in the interpolated points
+        - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
+          both endpoints
+
+    extrap : bool, float, array-like
+        whether to extrapolate values beyond knots (True) or return nan (False),
+        or a specified value to return for query points outside the bounds. Can
+        also be passed as a 2 element array or tuple to specify different conditions
+        for xq<x[0] and x[-1]<xq
+    period : float > 0, None
+        periodicity of the function. If given, function is assumed to be periodic
+        on the interval [0,period]. None denotes no periodicity
+
+    Notes
+    -----
+    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
+    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
+
+    """
+
+    x: jax.Array
+    f: jax.Array
+    derivs: dict
+    method: str
+    extrap: bool | float | tuple
+    period: float | tuple
+    axis: int
+
+    def __init__(self, x, f, method="cubic", extrap=False, period=None, **kwargs):
+        x, f = map(jnp.asarray, (x, f))
+        axis = kwargs.get("axis", 0)
+        fx = kwargs.pop("fx", None)
+
+        errorif(
+            (len(x) != f.shape[axis]) or (jnp.ndim(x) != 1),
+            ValueError,
+            "x and f must be arrays of equal length",
+        )
+        errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
+
+        self.x = x
+        self.f = f
+        self.axis = axis
+        self.method = method
+        self.extrap = extrap
+        self.period = period
+
+        if fx is None:
+            fx = _approx_df(x, f, method, axis, **kwargs)
+
+        self.derivs = {"fx": fx}
+
+    def __call__(self, xq, dx=0):
+        """Evaluate the interpolated function or its derivatives.
+
+        Parameters
+        ----------
+        xq : ndarray, shape(Nq,)
+            Query points where interpolation is desired
+        dx : int >= 0
+            Derivative to take.
+
+        Returns
+        -------
+        fq : ndarray, shape(Nq, ...)
+            Interpolated values.
+        """
+        return interp1d(
+            xq,
+            self.x,
+            self.f,
+            self.method,
+            dx,
+            self.extrap,
+            self.period,
+            **self.derivs,
+        )
+
+
+class Interpolator2D(eqx.Module):
+    """Convenience class for representing a 2D interpolated function.
+
+    Parameters
+    ----------
+    x : ndarray, shape(Nx,)
+        x coordinates of known function values ("knots")
+    y : ndarray, shape(Ny,)
+        y coordinates of known function values ("knots")
+    f : ndarray, shape(Nx,Ny,...)
+        function values to interpolate
+    method : str
+        method of interpolation
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: linear interpolation
+        - ``'cubic'``: C1 cubic splines (aka local splines)
+        - ``'cubic2'``: C2 cubic splines (aka natural splines)
+        - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
+        - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
+          keyword parameter ``c`` in float[0,1] to specify tension
+
+    extrap : bool, float, array-like
+        whether to extrapolate values beyond knots (True) or return nan (False),
+        or a specified value to return for query points outside the bounds. Can
+        also be passed as an array or tuple to specify different conditions
+        [[xlow, xhigh],[ylow,yhigh]]
+    period : float > 0, None, array-like, shape(2,)
+        periodicity of the function in x, y directions. None denotes no periodicity,
+        otherwise function is assumed to be periodic on the interval [0,period]. Use a
+        single value for the same in both directions.
+
+    Notes
+    -----
+    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
+    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
+
+    """
+
+    x: jax.Array
+    y: jax.Array
+    f: jax.Array
+    derivs: dict
+    method: str
+    extrap: bool | float | tuple
+    period: float | tuple
+    axis: int
+
+    def __init__(self, x, y, f, method="cubic", extrap=False, period=None, **kwargs):
+        x, y, f = map(jnp.asarray, (x, y, f))
+        axis = kwargs.get("axis", 0)
+        fx = kwargs.pop("fx", None)
+        fy = kwargs.pop("fy", None)
+        fxy = kwargs.pop("fxy", None)
+
+        errorif(
+            (len(x) != f.shape[0]) or (x.ndim != 1),
+            ValueError,
+            "x and f must be arrays of equal length",
+        )
+        errorif(
+            (len(y) != f.shape[1]) or (y.ndim != 1),
+            ValueError,
+            "y and f must be arrays of equal length",
+        )
+        errorif(method not in METHODS_2D, ValueError, f"unknown method {method}")
+
+        self.x = x
+        self.y = y
+        self.f = f
+        self.axis = axis
+        self.method = method
+        self.extrap = extrap
+        self.period = period
+
+        if fx is None:
+            fx = _approx_df(x, f, method, 0, **kwargs)
+        if fy is None:
+            fy = _approx_df(y, f, method, 1, **kwargs)
+        if fxy is None:
+            fxy = _approx_df(y, fx, method, 1, **kwargs)
+
+        self.derivs = {"fx": fx, "fy": fy, "fxy": fxy}
+
+    def __call__(self, xq, yq, dx=0, dy=0):
+        """Evaluate the interpolated function or its derivatives.
+
+        Parameters
+        ----------
+        xq, yq : ndarray, shape(Nq,)
+            x, y query points where interpolation is desired
+        dx, dy : int >= 0
+            Derivative to take in x, y directions.
+
+        Returns
+        -------
+        fq : ndarray, shape(Nq, ...)
+            Interpolated values.
+        """
+        return interp2d(
+            xq,
+            yq,
+            self.x,
+            self.y,
+            self.f,
+            self.method,
+            (dx, dy),
+            self.extrap,
+            self.period,
+            **self.derivs,
+        )
+
+
+class Interpolator3D(eqx.Module):
+    """Convenience class for representing a 3D interpolated function.
+
+    Parameters
+    ----------
+    x : ndarray, shape(Nx,)
+        x coordinates of known function values ("knots")
+    y : ndarray, shape(Ny,)
+        y coordinates of known function values ("knots")
+    z : ndarray, shape(Nz,)
+        z coordinates of known function values ("knots")
+    f : ndarray, shape(Nx,Ny,Nz,...)
+        function values to interpolate
+    method : str
+        method of interpolation
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: linear interpolation
+        - ``'cubic'``: C1 cubic splines (aka local splines)
+        - ``'cubic2'``: C2 cubic splines (aka natural splines)
+        - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
+        - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
+          keyword parameter ``c`` in float[0,1] to specify tension
+
+    extrap : bool, float, array-like
+        whether to extrapolate values beyond knots (True) or return nan (False),
+        or a specified value to return for query points outside the bounds. Can
+        also be passed as an array or tuple to specify different conditions
+        [[xlow, xhigh],[ylow,yhigh]]
+    period : float > 0, None, array-like, shape(2,)
+        periodicity of the function in x, y directions. None denotes no periodicity,
+        otherwise function is assumed to be periodic on the interval [0,period]. Use a
+        single value for the same in both directions.
+
+    Notes
+    -----
+    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
+    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
+
+    """
+
+    x: jax.Array
+    y: jax.Array
+    z: jax.Array
+    f: jax.Array
+    derivs: dict
+    method: str
+    extrap: bool | float | tuple
+    period: float | tuple
+    axis: int
+
+    def __init__(self, x, y, z, f, method="cubic", extrap=False, period=None, **kwargs):
+        x, y, z, f = map(jnp.asarray, (x, y, z, f))
+        axis = kwargs.get("axis", 0)
+
+        errorif(
+            (len(x) != f.shape[0]) or (x.ndim != 1),
+            ValueError,
+            "x and f must be arrays of equal length",
+        )
+        errorif(
+            (len(y) != f.shape[1]) or (y.ndim != 1),
+            ValueError,
+            "y and f must be arrays of equal length",
+        )
+        errorif(
+            (len(z) != f.shape[2]) or (z.ndim != 1),
+            ValueError,
+            "z and f must be arrays of equal length",
+        )
+        errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
+
+        fx = kwargs.pop("fx", None)
+        fy = kwargs.pop("fy", None)
+        fz = kwargs.pop("fz", None)
+        fxy = kwargs.pop("fxy", None)
+        fxz = kwargs.pop("fxz", None)
+        fyz = kwargs.pop("fyz", None)
+        fxyz = kwargs.pop("fxyz", None)
+
+        self.x = x
+        self.y = y
+        self.z = z
+        self.f = f
+        self.axis = axis
+        self.method = method
+        self.extrap = extrap
+        self.period = period
+
+        if fx is None:
+            fx = _approx_df(x, f, method, 0, **kwargs)
+        if fy is None:
+            fy = _approx_df(y, f, method, 1, **kwargs)
+        if fz is None:
+            fz = _approx_df(z, f, method, 2, **kwargs)
+        if fxy is None:
+            fxy = _approx_df(y, fx, method, 1, **kwargs)
+        if fxz is None:
+            fxz = _approx_df(z, fx, method, 2, **kwargs)
+        if fyz is None:
+            fyz = _approx_df(z, fy, method, 2, **kwargs)
+        if fxyz is None:
+            fxyz = _approx_df(z, fxy, method, 2, **kwargs)
+
+        self.derivs = {
+            "fx": fx,
+            "fy": fy,
+            "fz": fz,
+            "fxy": fxy,
+            "fxz": fxz,
+            "fyz": fyz,
+            "fxyz": fxyz,
+        }
+
+    def __call__(self, xq, yq, zq, dx=0, dy=0, dz=0):
+        """Evaluate the interpolated function or its derivatives.
+
+        Parameters
+        ----------
+        xq, yq, zq : ndarray, shape(Nq,)
+            x, y, z query points where interpolation is desired
+        dx, dy, dz : int >= 0
+            Derivative to take in x, y, z directions.
+
+        Returns
+        -------
+        fq : ndarray, shape(Nq, ...)
+            Interpolated values.
+        """
+        return interp3d(
+            xq,
+            yq,
+            zq,
+            self.x,
+            self.y,
+            self.z,
+            self.f,
+            self.method,
+            (dx, dy, dz),
+            self.extrap,
+            self.period,
+            **self.derivs,
+        )
 
 
 @partial(jit, static_argnames="method")
@@ -61,6 +419,12 @@ def interp1d(
     -------
     fq : ndarray, shape(Nq,...)
         function value at query points
+
+    Notes
+    -----
+    For repeated interpolation given the same x, f data, recommend using Interpolator1D
+    which caches the calculation of the derivatives and spline coefficients.
+
     """
     xq, x, f = map(jnp.asarray, (xq, x, f))
     axis = kwargs.get("axis", 0)
@@ -197,6 +561,13 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     -------
     fq : ndarray, shape(Nq,...)
         function value at query points
+
+    Notes
+    -----
+    For repeated interpolation given the same x, y, f data, recommend using
+    Interpolator2D which caches the calculation of the derivatives and spline
+    coefficients.
+
     """
     xq, yq, x, y, f = map(jnp.asarray, (xq, yq, x, y, f))
     fx = kwargs.pop("fx", None)
@@ -381,6 +752,13 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     -------
     fq : ndarray, shape(Nq,...)
         function value at query points
+
+    Notes
+    -----
+    For repeated interpolation given the same x, y, z, f data, recommend using
+    Interpolator3D which caches the calculation of the derivatives and spline
+    coefficients.
+
     """
     xq, yq, zq, x, y, z, f = map(jnp.asarray, (xq, yq, zq, x, y, z, f))
     errorif(

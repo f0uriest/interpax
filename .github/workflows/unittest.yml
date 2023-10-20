@@ -3,11 +3,11 @@ name: Unit tests
 on:
   push:
     branches:
-      - master
+      - main
       - dev
   pull_request:
     branches:
-      - master
+      - main
     paths-ignore:
       - 'docs/**'
       - 'devtools/**'
