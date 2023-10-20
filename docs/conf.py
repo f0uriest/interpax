@@ -99,7 +99,7 @@ def linkcode_resolve(domain, info):
 
     except subprocess.CalledProcessError:
         print("Failed to get head")  # so no head?
-        blob = "master"
+        blob = "main"
 
     linkcode_url = r"https://github.com/f0uriest/interpax/"
     linkcode_url = linkcode_url.strip("/") + f"/blob/{blob}/"
