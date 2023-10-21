@@ -54,9 +54,9 @@ For full details of various options see the `API documentation <https://interpax
     :target: https://github.com/f0uriest/interpax/blob/master/LICENSE
     :alt: License
 
-.. |DOI| image:: https://zenodo.org/badge/DOI/10.5281/zenodo.4876504.svg
-   :target: https://doi.org/10.5281/zenodo.4876504
-   :alt: DOI
+.. |DOI| image:: https://zenodo.org/badge/706703896.svg
+    :target: https://zenodo.org/doi/10.5281/zenodo.10028967
+    :alt: DOI
 
 .. |Docs| image:: https://img.shields.io/readthedocs/interpax?logo=Read-the-Docs
     :target: https://interpax.readthedocs.io/en/latest/?badge=latest
