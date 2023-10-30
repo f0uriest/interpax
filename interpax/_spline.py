@@ -429,6 +429,7 @@ def interp1d(
     xq, x, f = map(jnp.asarray, (xq, x, f))
     axis = kwargs.get("axis", 0)
     fx = kwargs.pop("fx", None)
+    outshape = xq.shape + f.shape[1:]
 
     errorif(
         (len(x) != f.shape[axis]) or (jnp.ndim(x) != 1),
@@ -486,6 +487,7 @@ def interp1d(
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
             fx = _approx_df(x, f, method, axis, **kwargs)
+        assert fx.shape == f.shape
 
         dx = x[i] - x[i - 1]
         delta = xq - x[i - 1]
@@ -500,10 +502,10 @@ def interp1d(
         F = jnp.vstack([f0, f1, fx0, fx1])
         coef = jnp.matmul(A_CUBIC, F)
         ttx = _get_t_der(t, derivative, dxi)
-        fq = jnp.einsum("ij,ji...->i...", ttx, coef)
+        fq = jnp.einsum("ji...,ij->i...", coef, ttx)
 
     fq = _extrap(xq, fq, x, lowx, highx)
-    return fq
+    return fq.reshape(outshape)
 
 
 @partial(jit, static_argnames="method")
@@ -574,6 +576,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fy = kwargs.pop("fy", None)
     fxy = kwargs.pop("fxy", None)
     xq, yq = jnp.broadcast_arrays(xq, yq)
+    outshape = xq.shape + f.shape[2:]
 
     errorif(
         (len(x) != f.shape[0]) or (x.ndim != 1),
@@ -650,6 +653,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
             fy = _approx_df(y, f, method, 1, **kwargs)
         if fxy is None:
             fxy = _approx_df(y, fx, method, 1, **kwargs)
+        assert fx.shape == fy.shape == fxy.shape == f.shape
 
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
@@ -688,7 +692,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
 
-    return fq
+    return fq.reshape(outshape)
 
 
 @partial(jit, static_argnames="method")
@@ -779,6 +783,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
 
     xq, yq, zq = jnp.broadcast_arrays(xq, yq, zq)
+    outshape = xq.shape + f.shape[3:]
 
     fx = kwargs.pop("fx", None)
     fy = kwargs.pop("fy", None)
@@ -884,7 +889,16 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
             fyz = _approx_df(z, fy, method, 2, **kwargs)
         if fxyz is None:
             fxyz = _approx_df(z, fxy, method, 2, **kwargs)
-
+        assert (
+            fx.shape
+            == fy.shape
+            == fz.shape
+            == fxy.shape
+            == fxz.shape
+            == fyz.shape
+            == fxyz.shape
+            == f.shape
+        )
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
         k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
@@ -940,7 +954,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fq = _extrap(yq, fq, y, lowy, highy)
     fq = _extrap(zq, fq, z, lowz, highz)
 
-    return fq
+    return fq.reshape(outshape)
 
 
 @partial(jit, static_argnames=("axis"))
@@ -972,13 +986,13 @@ def _get_t_der(t, derivative, dxi):
     """Get arrays of [1,t,t^2,t^3] for cubic interpolation."""
     t0 = jnp.zeros_like(t)
     t1 = jnp.ones_like(t)
-    dxi = dxi[:, None]
+    dxi = jnp.atleast_1d(dxi)[:, None]
     # derivatives of monomials
-    d0 = lambda: jnp.array([t1, t, t**2, t**3]).T
+    d0 = lambda: jnp.array([t1, t, t**2, t**3]).T * dxi**0
     d1 = lambda: jnp.array([t0, t1, 2 * t, 3 * t**2]).T * dxi
     d2 = lambda: jnp.array([t0, t0, 2 * t1, 6 * t]).T * dxi**2
     d3 = lambda: jnp.array([t0, t0, t0, 6 * t1]).T * dxi**3
-    d4 = lambda: jnp.array([t0, t0, t0, t0]).T
+    d4 = lambda: jnp.array([t0, t0, t0, t0]).T * (dxi * 0)
 
     return jax.lax.switch(derivative, [d0, d1, d2, d3, d4])
 
@@ -1109,9 +1123,10 @@ def _approx_df(x, f, method, axis, **kwargs):
             ],
             axis=axis,
         )
-        b = jnp.moveaxis(b, axis, 0).reshape((b.shape[axis], -1))
-        fx = jnp.linalg.solve(A, b)
-        fx = jnp.moveaxis(fx.reshape(f.shape), 0, axis)
+        ba = jnp.moveaxis(b, axis, 0)
+        br = ba.reshape((b.shape[axis], -1))
+        fx = jnp.linalg.solve(A, br).reshape(ba.shape)
+        fx = jnp.moveaxis(fx, 0, axis)
         return fx
 
     elif method in ["cardinal", "catmull-rom"]:
