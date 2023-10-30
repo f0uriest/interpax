@@ -429,6 +429,7 @@ def interp1d(
     xq, x, f = map(jnp.asarray, (xq, x, f))
     axis = kwargs.get("axis", 0)
     fx = kwargs.pop("fx", None)
+    outshape = xq.shape + f.shape[1:]
 
     errorif(
         (len(x) != f.shape[axis]) or (jnp.ndim(x) != 1),
@@ -486,6 +487,7 @@ def interp1d(
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
             fx = _approx_df(x, f, method, axis, **kwargs)
+        assert fx.shape == f.shape
 
         dx = x[i] - x[i - 1]
         delta = xq - x[i - 1]
@@ -500,10 +502,10 @@ def interp1d(
         F = jnp.vstack([f0, f1, fx0, fx1])
         coef = jnp.matmul(A_CUBIC, F)
         ttx = _get_t_der(t, derivative, dxi)
-        fq = jnp.einsum("ij,ji...->i...", ttx, coef)
+        fq = jnp.einsum("ji...,ij->i...", coef, ttx)
 
     fq = _extrap(xq, fq, x, lowx, highx)
-    return fq
+    return fq.reshape(outshape)
 
 
 @partial(jit, static_argnames="method")
@@ -574,6 +576,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fy = kwargs.pop("fy", None)
     fxy = kwargs.pop("fxy", None)
     xq, yq = jnp.broadcast_arrays(xq, yq)
+    outshape = xq.shape + f.shape[2:]
 
     errorif(
         (len(x) != f.shape[0]) or (x.ndim != 1),
@@ -601,9 +604,21 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     if method == "nearest":
 
         def derivative0():
-            i = jnp.argmin(jnp.abs(xq[:, np.newaxis] - x[np.newaxis]), axis=1)
-            j = jnp.argmin(jnp.abs(yq[:, np.newaxis] - y[np.newaxis]), axis=1)
-            return f[i, j]
+            # because of the regular spaced grid we know that the nearest point
+            # will be one of the 4 neighbors on the grid, so we first find those
+            # and then take the nearest one among them.
+            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
+            j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
+            neighbors_x = jnp.array(
+                [[x[i], x[i - 1], x[i], x[i - 1]], [y[j], y[j], y[j - 1], y[j - 1]]]
+            )
+            neighbors_f = jnp.array(
+                [f[i, j], f[i - 1, j], f[i, j - 1], f[i - 1, j - 1]]
+            )
+            xyq = jnp.array([xq, yq])
+            dist = jnp.linalg.norm(neighbors_x - xyq[:, None, :], axis=0)
+            idx = jnp.argmin(dist, axis=0)
+            return jax.vmap(jnp.take)(neighbors_f.T, idx)
 
         def derivative1():
             return jnp.zeros((xq.size, *f.shape[2:]))
@@ -640,16 +655,16 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         tx = jax.lax.switch(derivative_x, [dx0, dx1, dx2])
         ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
         F = jnp.array([[f00, f01], [f10, f11]])
-        fq = dxi * dyi * jnp.einsum("ik,ijk,jk->k", tx, F, ty)
+        fq = dxi * dyi * jnp.einsum("ijk...,ik,jk->k...", F, tx, ty)
 
     elif method in CUBIC_METHODS:
-
         if fx is None:
             fx = _approx_df(x, f, method, 0, **kwargs)
         if fy is None:
             fy = _approx_df(y, f, method, 1, **kwargs)
         if fxy is None:
             fxy = _approx_df(y, fx, method, 1, **kwargs)
+        assert fx.shape == fy.shape == fxy.shape == f.shape
 
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
@@ -683,12 +698,12 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         coef = jnp.moveaxis(coef.reshape((4, 4, -1), order="F"), -1, 0)
         ttx = _get_t_der(tx, derivative_x, dxi)
         tty = _get_t_der(ty, derivative_y, dyi)
-        fq = jnp.einsum("ij,ijk...,ik->i...", ttx, coef, tty)
+        fq = jnp.einsum("ijk...,ij,ik->i...", coef, ttx, tty)
 
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
 
-    return fq
+    return fq.reshape(outshape)
 
 
 @partial(jit, static_argnames="method")
@@ -779,6 +794,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
 
     xq, yq, zq = jnp.broadcast_arrays(xq, yq, zq)
+    outshape = xq.shape + f.shape[3:]
 
     fx = kwargs.pop("fx", None)
     fy = kwargs.pop("fy", None)
@@ -811,10 +827,35 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     if method == "nearest":
 
         def derivative0():
-            i = jnp.argmin(jnp.abs(xq[:, np.newaxis] - x[np.newaxis]), axis=1)
-            j = jnp.argmin(jnp.abs(yq[:, np.newaxis] - y[np.newaxis]), axis=1)
-            k = jnp.argmin(jnp.abs(zq[:, np.newaxis] - z[np.newaxis]), axis=1)
-            return f[i, j, k]
+            # because of the regular spaced grid we know that the nearest point
+            # will be one of the 8 neighbors on the grid, so we first find those
+            # and then take the nearest one among them.
+            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
+            j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
+            k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
+            neighbors_x = jnp.array(
+                [
+                    [x[i], x[i - 1], x[i], x[i - 1], x[i], x[i - 1], x[i], x[i - 1]],
+                    [y[j], y[j], y[j - 1], y[j - 1], y[j], y[j], y[j - 1], y[j - 1]],
+                    [z[k], z[k], z[k], z[k], z[k - 1], z[k - 1], z[k - 1], z[k - 1]],
+                ]
+            )
+            neighbors_f = jnp.array(
+                [
+                    f[i, j, k],
+                    f[i - 1, j, k],
+                    f[i, j - 1, k],
+                    f[i - 1, j - 1, k],
+                    f[i, j, k - 1],
+                    f[i - 1, j, k - 1],
+                    f[i, j - 1, k - 1],
+                    f[i - 1, j - 1, k - 1],
+                ]
+            )
+            xyzq = jnp.array([xq, yq, zq])
+            dist = jnp.linalg.norm(neighbors_x - xyzq[:, None, :], axis=0)
+            idx = jnp.argmin(dist, axis=0)
+            return jax.vmap(jnp.take)(neighbors_f.T, idx)
 
         def derivative1():
             return jnp.zeros((xq.size, *f.shape[3:]))
@@ -866,8 +907,8 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
         tz = jax.lax.switch(derivative_z, [dz0, dz1, dz2])
 
-        F = jnp.array([[[f000, f010], [f100, f110]], [[f001, f011], [f101, f111]]])
-        fq = dxi * dyi * dzi * jnp.einsum("il,ijkl,jl,kl->l", tx, F, ty, tz)
+        F = jnp.array([[[f000, f001], [f010, f011]], [[f100, f101], [f110, f111]]])
+        fq = dxi * dyi * dzi * jnp.einsum("lijk...,lk,ik,jk->k...", F, tx, ty, tz)
 
     elif method in CUBIC_METHODS:
         if fx is None:
@@ -884,7 +925,16 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
             fyz = _approx_df(z, fy, method, 2, **kwargs)
         if fxyz is None:
             fxyz = _approx_df(z, fxy, method, 2, **kwargs)
-
+        assert (
+            fx.shape
+            == fy.shape
+            == fz.shape
+            == fxy.shape
+            == fxz.shape
+            == fyz.shape
+            == fxyz.shape
+            == f.shape
+        )
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
         k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
@@ -940,7 +990,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fq = _extrap(yq, fq, y, lowy, highy)
     fq = _extrap(zq, fq, z, lowz, highz)
 
-    return fq
+    return fq.reshape(outshape)
 
 
 @partial(jit, static_argnames=("axis"))
@@ -972,13 +1022,13 @@ def _get_t_der(t, derivative, dxi):
     """Get arrays of [1,t,t^2,t^3] for cubic interpolation."""
     t0 = jnp.zeros_like(t)
     t1 = jnp.ones_like(t)
-    dxi = dxi[:, None]
+    dxi = jnp.atleast_1d(dxi)[:, None]
     # derivatives of monomials
-    d0 = lambda: jnp.array([t1, t, t**2, t**3]).T
+    d0 = lambda: jnp.array([t1, t, t**2, t**3]).T * dxi**0
     d1 = lambda: jnp.array([t0, t1, 2 * t, 3 * t**2]).T * dxi
     d2 = lambda: jnp.array([t0, t0, 2 * t1, 6 * t]).T * dxi**2
     d3 = lambda: jnp.array([t0, t0, t0, 6 * t1]).T * dxi**3
-    d4 = lambda: jnp.array([t0, t0, t0, t0]).T
+    d4 = lambda: jnp.array([t0, t0, t0, t0]).T * (dxi * 0)
 
     return jax.lax.switch(derivative, [d0, d1, d2, d3, d4])
 
@@ -1109,9 +1159,10 @@ def _approx_df(x, f, method, axis, **kwargs):
             ],
             axis=axis,
         )
-        b = jnp.moveaxis(b, axis, 0).reshape((b.shape[axis], -1))
-        fx = jnp.linalg.solve(A, b)
-        fx = jnp.moveaxis(fx.reshape(f.shape), 0, axis)
+        ba = jnp.moveaxis(b, axis, 0)
+        br = ba.reshape((b.shape[axis], -1))
+        fx = jnp.linalg.solve(A, br).reshape(ba.shape)
+        fx = jnp.moveaxis(fx, 0, axis)
         return fx
 
     elif method in ["cardinal", "catmull-rom"]:
