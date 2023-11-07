@@ -6,6 +6,7 @@ from ._spline import (
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
+    approx_df,
     interp1d,
     interp2d,
     interp3d,

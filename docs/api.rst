@@ -22,6 +22,10 @@ fft_interp2d
 ************
 .. autofunction:: interpax.fft_interp2d
 
+approx_df
+*********
+.. autofunction:: interpax.approx_df
+
 Interpolator1D
 **************
 .. autoclass:: interpax.Interpolator1D

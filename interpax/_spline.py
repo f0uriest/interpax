@@ -86,7 +86,7 @@ class Interpolator1D(eqx.Module):
         self.period = period
 
         if fx is None:
-            fx = _approx_df(x, f, method, axis, **kwargs)
+            fx = approx_df(x, f, method, axis, **kwargs)
 
         self.derivs = {"fx": fx}
 
@@ -193,11 +193,11 @@ class Interpolator2D(eqx.Module):
         self.period = period
 
         if fx is None:
-            fx = _approx_df(x, f, method, 0, **kwargs)
+            fx = approx_df(x, f, method, 0, **kwargs)
         if fy is None:
-            fy = _approx_df(y, f, method, 1, **kwargs)
+            fy = approx_df(y, f, method, 1, **kwargs)
         if fxy is None:
-            fxy = _approx_df(y, fx, method, 1, **kwargs)
+            fxy = approx_df(y, fx, method, 1, **kwargs)
 
         self.derivs = {"fx": fx, "fy": fy, "fxy": fxy}
 
@@ -320,19 +320,19 @@ class Interpolator3D(eqx.Module):
         self.period = period
 
         if fx is None:
-            fx = _approx_df(x, f, method, 0, **kwargs)
+            fx = approx_df(x, f, method, 0, **kwargs)
         if fy is None:
-            fy = _approx_df(y, f, method, 1, **kwargs)
+            fy = approx_df(y, f, method, 1, **kwargs)
         if fz is None:
-            fz = _approx_df(z, f, method, 2, **kwargs)
+            fz = approx_df(z, f, method, 2, **kwargs)
         if fxy is None:
-            fxy = _approx_df(y, fx, method, 1, **kwargs)
+            fxy = approx_df(y, fx, method, 1, **kwargs)
         if fxz is None:
-            fxz = _approx_df(z, fx, method, 2, **kwargs)
+            fxz = approx_df(z, fx, method, 2, **kwargs)
         if fyz is None:
-            fyz = _approx_df(z, fy, method, 2, **kwargs)
+            fyz = approx_df(z, fy, method, 2, **kwargs)
         if fxyz is None:
-            fxyz = _approx_df(z, fxy, method, 2, **kwargs)
+            fxyz = approx_df(z, fxy, method, 2, **kwargs)
 
         self.derivs = {
             "fx": fx,
@@ -486,7 +486,7 @@ def interp1d(
 
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
-            fx = _approx_df(x, f, method, axis, **kwargs)
+            fx = approx_df(x, f, method, axis, **kwargs)
         assert fx.shape == f.shape
 
         dx = x[i] - x[i - 1]
@@ -659,11 +659,11 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     elif method in CUBIC_METHODS:
         if fx is None:
-            fx = _approx_df(x, f, method, 0, **kwargs)
+            fx = approx_df(x, f, method, 0, **kwargs)
         if fy is None:
-            fy = _approx_df(y, f, method, 1, **kwargs)
+            fy = approx_df(y, f, method, 1, **kwargs)
         if fxy is None:
-            fxy = _approx_df(y, fx, method, 1, **kwargs)
+            fxy = approx_df(y, fx, method, 1, **kwargs)
         assert fx.shape == fy.shape == fxy.shape == f.shape
 
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
@@ -912,19 +912,19 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     elif method in CUBIC_METHODS:
         if fx is None:
-            fx = _approx_df(x, f, method, 0, **kwargs)
+            fx = approx_df(x, f, method, 0, **kwargs)
         if fy is None:
-            fy = _approx_df(y, f, method, 1, **kwargs)
+            fy = approx_df(y, f, method, 1, **kwargs)
         if fz is None:
-            fz = _approx_df(z, f, method, 2, **kwargs)
+            fz = approx_df(z, f, method, 2, **kwargs)
         if fxy is None:
-            fxy = _approx_df(y, fx, method, 1, **kwargs)
+            fxy = approx_df(y, fx, method, 1, **kwargs)
         if fxz is None:
-            fxz = _approx_df(z, fx, method, 2, **kwargs)
+            fxz = approx_df(z, fx, method, 2, **kwargs)
         if fyz is None:
-            fyz = _approx_df(z, fy, method, 2, **kwargs)
+            fyz = approx_df(z, fy, method, 2, **kwargs)
         if fxyz is None:
-            fxyz = _approx_df(z, fxy, method, 2, **kwargs)
+            fxyz = approx_df(z, fxy, method, 2, **kwargs)
         assert (
             fx.shape
             == fy.shape
@@ -1095,8 +1095,37 @@ def _extrap(xq, fq, x, lo, hi):
 
 
 @partial(jit, static_argnames=("method", "axis"))
-def _approx_df(x, f, method, axis, **kwargs):
-    """Approximates derivatives for cubic spline interpolation."""
+def approx_df(x, f, method="cubic", axis=-1, **kwargs):
+    """Approximates first derivatives using cubic spline interpolation.
+
+    Parameters
+    ----------
+    x : ndarray, shape(Nx,)
+        coordinates of known function values ("knots")
+    f : ndarray
+        Known function values. Should have length ``Nx`` along axis=axis
+    method : str
+        method of approximation
+
+        - ``'cubic'``: C1 cubic splines (aka local splines)
+        - ``'cubic2'``: C2 cubic splines (aka natural splines)
+        - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
+        - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
+          keyword parameter ``c`` in float[0,1] to specify tension
+        - ``'monotonic'``: C1 cubic splines that attempt to preserve monotonicity in the
+          data, and will not introduce new extrema in the interpolated points
+        - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
+          both endpoints
+
+    axis : int
+        Axis along which f is varying.
+
+    Returns
+    -------
+    df : ndarray, shape(f.shape)
+        First derivative of f with respect to x.
+
+    """
     if method == "cubic":
         dx = jnp.diff(x)
         df = jnp.diff(f, axis=axis)
