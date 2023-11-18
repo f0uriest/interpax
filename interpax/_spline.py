@@ -474,6 +474,11 @@ def interp1d(
     fx = kwargs.pop("fx", None)
     outshape = xq.shape + f.shape[1:]
 
+    # Promote scalar query points to 1D array.
+    # Note this is done after the computation of outshape
+    # to make jax.grad work in the scalar case.
+    xq = jnp.atleast_1d(xq)
+
     errorif(
         (len(x) != f.shape[axis]) or (jnp.ndim(x) != 1),
         ValueError,
@@ -620,6 +625,11 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fxy = kwargs.pop("fxy", None)
     xq, yq = jnp.broadcast_arrays(xq, yq)
     outshape = xq.shape + f.shape[2:]
+
+    # Promote scalar query points to 1D array.
+    # Note this is done after the computation of outshape
+    # to make jax.grad work in the scalar case.
+    xq, yq = map(jnp.atleast_1d, (xq, yq))
 
     errorif(
         (len(x) != f.shape[0]) or (x.ndim != 1),
@@ -838,6 +848,11 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     xq, yq, zq = jnp.broadcast_arrays(xq, yq, zq)
     outshape = xq.shape + f.shape[3:]
+
+    # Promote scalar query points to 1D array.
+    # Note this is done after the computation of outshape
+    # to make jax.grad work in the scalar case.
+    xq, yq, zq = map(jnp.atleast_1d, (xq, yq, zq))
 
     fx = kwargs.pop("fx", None)
     fy = kwargs.pop("fy", None)

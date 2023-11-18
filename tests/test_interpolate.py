@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.config import config as jax_config
+from jax import config as jax_config
 
 from interpax import (
     Interpolator1D,
@@ -24,10 +24,16 @@ class TestInterp1D:
     """Tests for interp1d function."""
 
     @pytest.mark.unit
-    def test_interp1d(self):
+    @pytest.mark.parametrize(
+        "x",
+        [
+            np.linspace(0, 2 * np.pi, 10000),
+            0.0,
+        ],
+    )
+    def test_interp1d(self, x):
         """Test accuracy of different 1d interpolation methods."""
         xp = np.linspace(0, 2 * np.pi, 100)
-        x = np.linspace(0, 2 * np.pi, 10000)
         f = lambda x: np.sin(x)
         fp = f(xp)
 
@@ -99,12 +105,17 @@ class TestInterp2D:
     """Tests for interp2d function."""
 
     @pytest.mark.unit
-    def test_interp2d(self):
+    @pytest.mark.parametrize(
+        "x, y",
+        [
+            (np.linspace(0, 3 * np.pi, 1000), np.linspace(0, 2 * np.pi, 1000)),
+            (0.0, 0.0),
+        ],
+    )
+    def test_interp2d(self, x, y):
         """Test accuracy of different 2d interpolation methods."""
         xp = np.linspace(0, 3 * np.pi, 99)
         yp = np.linspace(0, 2 * np.pi, 40)
-        x = np.linspace(0, 3 * np.pi, 1000)
-        y = np.linspace(0, 2 * np.pi, 1000)
         xxp, yyp = np.meshgrid(xp, yp, indexing="ij")
 
         f = lambda x, y: np.sin(x) * np.cos(y)
@@ -150,14 +161,22 @@ class TestInterp3D:
     """Tests for interp3d function."""
 
     @pytest.mark.unit
-    def test_interp3d(self):
+    @pytest.mark.parametrize(
+        "x, y, z",
+        [
+            (
+                np.linspace(0, np.pi, 1000),
+                np.linspace(0, 2 * np.pi, 1000),
+                np.linspace(0, 3, 1000),
+            ),
+            (0.0, 0.0, 0.0),
+        ],
+    )
+    def test_interp3d(self, x, y, z):
         """Test accuracy of different 3d interpolation methods."""
         xp = np.linspace(0, np.pi, 20)
         yp = np.linspace(0, 2 * np.pi, 30)
         zp = np.linspace(0, 3, 25)
-        x = np.linspace(0, np.pi, 1000)
-        y = np.linspace(0, 2 * np.pi, 1000)
-        z = np.linspace(0, 3, 1000)
         xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
 
         f = lambda x, y, z: np.sin(x) * np.cos(y) * z**2
