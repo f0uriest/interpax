@@ -513,9 +513,9 @@ def interp1d(
             delta = xq - x[i - 1]
             fq = jnp.where(
                 (dx == 0),
-                jnp.take(f, i, axis),
-                jnp.take(f, i - 1, axis) + delta * dxi * df,
-            )
+                jnp.take(f, i, axis).T,
+                jnp.take(f, i - 1, axis).T + (delta * dxi * df.T),
+            ).T
             return fq
 
         def derivative1():
@@ -523,7 +523,7 @@ def interp1d(
             df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
             dx = x[i] - x[i - 1]
             dxi = jnp.where(dx == 0, 0, 1 / dx)
-            return df * dxi
+            return (df.T * dxi).T
 
         def derivative2():
             return jnp.zeros((xq.size, *f.shape[1:]))
@@ -544,11 +544,11 @@ def interp1d(
 
         f0 = jnp.take(f, i - 1, axis)
         f1 = jnp.take(f, i, axis)
-        fx0 = jnp.take(fx, i - 1, axis) * dx
-        fx1 = jnp.take(fx, i, axis) * dx
+        fx0 = (jnp.take(fx, i - 1, axis).T * dx).T
+        fx1 = (jnp.take(fx, i, axis).T * dx).T
 
-        F = jnp.vstack([f0, f1, fx0, fx1])
-        coef = jnp.matmul(A_CUBIC, F)
+        F = jnp.stack([f0, f1, fx0, fx1], axis=0).T
+        coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F).T
         ttx = _get_t_der(t, derivative, dxi)
         fq = jnp.einsum("ji...,ij->i...", coef, ttx)
 
@@ -666,12 +666,12 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
                 [[x[i], x[i - 1], x[i], x[i - 1]], [y[j], y[j], y[j - 1], y[j - 1]]]
             )
             neighbors_f = jnp.array(
-                [f[i, j], f[i - 1, j], f[i, j - 1], f[i - 1, j - 1]]
+                [f[i, j].T, f[i - 1, j].T, f[i, j - 1].T, f[i - 1, j - 1].T]
             )
             xyq = jnp.array([xq, yq])
             dist = jnp.linalg.norm(neighbors_x - xyq[:, None, :], axis=0)
             idx = jnp.argmin(dist, axis=0)
-            return jax.vmap(jnp.take)(neighbors_f.T, idx)
+            return jax.vmap(lambda a, b: jnp.take(a, b, axis=-1))(neighbors_f.T, idx)
 
         def derivative1():
             return jnp.zeros((xq.size, *f.shape[2:]))
@@ -708,7 +708,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         tx = jax.lax.switch(derivative_x, [dx0, dx1, dx2])
         ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
         F = jnp.array([[f00, f01], [f10, f11]])
-        fq = dxi * dyi * jnp.einsum("ijk...,ik,jk->k...", F, tx, ty)
+        fq = (dxi * dyi * jnp.einsum("ijk...,ik,jk->k...", F, tx, ty).T).T
 
     elif method in CUBIC_METHODS:
         if fx is None:
@@ -740,15 +740,16 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         for ff in fs.keys():
             for jj in [0, 1]:
                 for ii in [0, 1]:
-                    fsq[ff + str(ii) + str(jj)] = fs[ff][i - 1 + ii, j - 1 + jj]
+                    s = ff + str(ii) + str(jj)
+                    fsq[s] = fs[ff][i - 1 + ii, j - 1 + jj]
                     if "x" in ff:
-                        fsq[ff + str(ii) + str(jj)] *= dx
+                        fsq[s] = (dx * fsq[s].T).T
                     if "y" in ff:
-                        fsq[ff + str(ii) + str(jj)] *= dy
+                        fsq[s] = (dy * fsq[s].T).T
 
-        F = jnp.vstack([foo for foo in fsq.values()])
-        coef = jnp.matmul(A_BICUBIC, F)
-        coef = jnp.moveaxis(coef.reshape((4, 4, -1), order="F"), -1, 0)
+        F = jnp.stack([foo for foo in fsq.values()], axis=0).T
+        coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_BICUBIC, F).T
+        coef = jnp.moveaxis(coef.reshape((4, 4, *coef.shape[1:]), order="F"), 2, 0)
         ttx = _get_t_der(tx, derivative_x, dxi)
         tty = _get_t_der(ty, derivative_y, dyi)
         fq = jnp.einsum("ijk...,ij,ik->i...", coef, ttx, tty)
@@ -900,20 +901,20 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
             )
             neighbors_f = jnp.array(
                 [
-                    f[i, j, k],
-                    f[i - 1, j, k],
-                    f[i, j - 1, k],
-                    f[i - 1, j - 1, k],
-                    f[i, j, k - 1],
-                    f[i - 1, j, k - 1],
-                    f[i, j - 1, k - 1],
-                    f[i - 1, j - 1, k - 1],
+                    f[i, j, k].T,
+                    f[i - 1, j, k].T,
+                    f[i, j - 1, k].T,
+                    f[i - 1, j - 1, k].T,
+                    f[i, j, k - 1].T,
+                    f[i - 1, j, k - 1].T,
+                    f[i, j - 1, k - 1].T,
+                    f[i - 1, j - 1, k - 1].T,
                 ]
             )
             xyzq = jnp.array([xq, yq, zq])
             dist = jnp.linalg.norm(neighbors_x - xyzq[:, None, :], axis=0)
             idx = jnp.argmin(dist, axis=0)
-            return jax.vmap(jnp.take)(neighbors_f.T, idx)
+            return jax.vmap(lambda a, b: jnp.take(a, b, axis=-1))(neighbors_f.T, idx)
 
         def derivative1():
             return jnp.zeros((xq.size, *f.shape[3:]))
@@ -966,7 +967,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         tz = jax.lax.switch(derivative_z, [dz0, dz1, dz2])
 
         F = jnp.array([[[f000, f001], [f010, f011]], [[f100, f101], [f110, f111]]])
-        fq = dxi * dyi * dzi * jnp.einsum("lijk...,lk,ik,jk->k...", F, tx, ty, tz)
+        fq = (dxi * dyi * dzi * jnp.einsum("lijk...,lk,ik,jk->k...", F, tx, ty, tz).T).T
 
     elif method in CUBIC_METHODS:
         if fx is None:
@@ -1026,19 +1027,18 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
             for kk in [0, 1]:
                 for jj in [0, 1]:
                     for ii in [0, 1]:
-                        fsq[ff + str(ii) + str(jj) + str(kk)] = fs[ff][
-                            i - 1 + ii, j - 1 + jj, k - 1 + kk
-                        ]
+                        s = ff + str(ii) + str(jj) + str(kk)
+                        fsq[s] = fs[ff][i - 1 + ii, j - 1 + jj, k - 1 + kk]
                         if "x" in ff:
-                            fsq[ff + str(ii) + str(jj) + str(kk)] *= dx
+                            fsq[s] = (dx * fsq[s].T).T
                         if "y" in ff:
-                            fsq[ff + str(ii) + str(jj) + str(kk)] *= dy
+                            fsq[s] = (dy * fsq[s].T).T
                         if "z" in ff:
-                            fsq[ff + str(ii) + str(jj) + str(kk)] *= dz
+                            fsq[s] = (dz * fsq[s].T).T
 
-        F = jnp.vstack([foo for foo in fsq.values()])
-        coef = jnp.matmul(A_TRICUBIC, F)
-        coef = jnp.moveaxis(coef.reshape((4, 4, 4, -1), order="F"), -1, 0)
+        F = jnp.stack([foo for foo in fsq.values()], axis=0).T
+        coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_TRICUBIC, F).T
+        coef = jnp.moveaxis(coef.reshape((4, 4, 4, *coef.shape[1:]), order="F"), 3, 0)
         ttx = _get_t_der(tx, derivative_x, dxi)
         tty = _get_t_der(ty, derivative_y, dyi)
         ttz = _get_t_der(tz, derivative_z, dzi)
@@ -1129,13 +1129,13 @@ def _extrap(
         # lo is either False (no extrapolation) or a fixed value to fill in
         if isbool(lo):
             lo = jnp.nan
-        return jnp.where(xq < x[0], lo, fq)
+        return jnp.where(xq < x[0], lo, fq.T).T
 
     def hiclip(fq, hi):
         # hi is either False (no extrapolation) or a fixed value to fill in
         if isbool(hi):
             hi = jnp.nan
-        return jnp.where(xq > x[-1], hi, fq)
+        return jnp.where(xq > x[-1], hi, fq.T).T
 
     def noclip(fq, *_):
         return fq

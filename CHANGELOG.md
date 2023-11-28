@@ -1,9 +1,43 @@
 Changelog
 =========
 
+v0.2.4
+------
+- Fixes for scalar valued query points
+- Fixes for interpolating vector valued functions
+
+**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.2.3...v0.2.4
+
+
+v0.2.3
+------
+- Add type annotations
+
+**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.2.2...v0.2.3
+
+
+v0.2.2
+------
+- Add ``approx_df`` to public API
+
+**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.2.1...v0.2.2
+
+
+v0.2.1
+------
+- More efficient nearest neighbor search
+- Correct slopes for linear interpolation in 2d, 3d
+- Fix for cubic2 splines in 2d and 3d
+Forward and reverse mode AD now fully working and tested
+
+**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.2.0...v0.2.1
+
+
 v0.2.0
 -------
 - Adds convenience classes for spline interpolation that cache the derivative calculation.
+
+**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.1.0...v0.2.0
 
 
 v0.1.0
