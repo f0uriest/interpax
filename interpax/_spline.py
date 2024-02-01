@@ -1104,6 +1104,8 @@ def _parse_ndarg(arg, n):
 def _parse_extrap(extrap, n):
     if isbool(extrap):  # same for lower,upper in all dimensions
         return tuple(extrap for _ in range(2 * n))
+    elif jnp.isscalar(extrap):
+        return tuple(extrap for _ in range(2 * n))
     elif len(extrap) == 2 and jnp.isscalar(extrap[0]):  # same l,h for all dimensions
         return tuple(e for _ in range(n) for e in extrap)
     elif len(extrap) == n and all(len(extrap[i]) == 2 for i in range(n)):
@@ -1140,15 +1142,17 @@ def _extrap(
     def noclip(fq, *_):
         return fq
 
+    # if extrap = True, don't clip. If it's false or numeric, clip to that value
+    # isbool(x) & bool(x) is testing if extrap is True but works for np/jnp bools
     fq = jax.lax.cond(
-        isbool(lo) & lo,
+        isbool(lo) & jnp.asarray(lo).astype(bool),
         noclip,
         loclip,
         fq,
         lo,
     )
     fq = jax.lax.cond(
-        isbool(hi) & hi,
+        isbool(hi) & jnp.asarray(hi).astype(bool),
         noclip,
         hiclip,
         fq,
