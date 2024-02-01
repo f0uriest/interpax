@@ -1,21 +1,9 @@
-name: Unit tests
+name: Weekly tests
 
 on:
-  push:
-    branches:
-      - main
-      - dev
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - 'docs/**'
-      - 'devtools/**'
+  schedule:
+      - cron: '17 9 * * 1'
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   unit_tests:
@@ -48,16 +36,3 @@ jobs:
           path: |
             ./cov.xml
             ./prof.db
-      - name: Upload coverage
-        id : codecov
-        uses: Wandalen/wretry.action@v1.0.36
-        with:
-          action: codecov/codecov-action@v3
-          with: |
-            token: ${{ secrets.CODECOV_TOKEN }}
-            name: codecov-umbrella
-            files: ./cov.xml
-            fail_ci_if_error: true
-            verbose: true
-          attempt_limit: 10
-          attempt_delay: 60000 # ms, 1 min
