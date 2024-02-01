@@ -613,3 +613,15 @@ class TestAD:
             # for some reason finite difference gives nan at endpoints so ignore that
             np.testing.assert_allclose(jacf1[1:-1], jacd1[1:-1], rtol=1e-6, atol=1e-6)
             np.testing.assert_allclose(jacf2[1:-1], jacd2[1:-1], rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.unit
+def test_extrap_float():
+    """Test for extrap being a float, from gh issue #16."""
+    x = jnp.linspace(0, 10, 10)
+    y = jnp.linspace(0, 8, 8)
+    z = jnp.zeros((10, 8)) + 1.0
+    interpol = Interpolator2D(x, y, z, extrap=0.0)
+    np.testing.assert_allclose(interpol(4.5, 5.3), 1.0)
+    np.testing.assert_allclose(interpol(-4.5, 5.3), 0.0)
+    np.testing.assert_allclose(interpol(4.5, -5.3), 0.0)
