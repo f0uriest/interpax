@@ -7,6 +7,7 @@ from typing import Union
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import lineax as lx
 import numpy as np
 from jax import jit
 
@@ -1228,22 +1229,14 @@ def approx_df(
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         df = dxi * df
 
-        A = jnp.diag(
-            jnp.concatenate(
-                (
-                    np.array([1.0]),
-                    2 * (dx.flatten()[:-1] + dx.flatten()[1:]),
-                    np.array([1.0]),
-                )
-            )
-        )
-        upper_diag1 = jnp.diag(
-            jnp.concatenate((np.array([1.0]), dx.flatten()[:-1])), k=1
-        )
-        lower_diag1 = jnp.diag(
-            jnp.concatenate((dx.flatten()[1:], np.array([1.0]))), k=-1
-        )
-        A += upper_diag1 + lower_diag1
+        one = jnp.array([1.0])
+        dxflat = dx.flatten()
+        diag = jnp.concatenate([one, 2 * (dxflat[:-1] + dxflat[1:]), one])
+        upper_diag = jnp.concatenate([one, dxflat[:-1]])
+        lower_diag = jnp.concatenate([dxflat[1:], one])
+
+        A = lx.TridiagonalLinearOperator(diag, lower_diag, upper_diag)
+
         b = jnp.concatenate(
             [
                 2 * jnp.take(df, jnp.array([0]), axis, mode="wrap"),
@@ -1260,8 +1253,9 @@ def approx_df(
         )
         ba = jnp.moveaxis(b, axis, 0)
         br = ba.reshape((b.shape[axis], -1))
-        fx = jnp.linalg.solve(A, br).reshape(ba.shape)
-        fx = jnp.moveaxis(fx, 0, axis)
+        solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal()).value
+        fx = jnp.vectorize(solve, signature="(n)->(n)")(br.T).T
+        fx = jnp.moveaxis(fx.reshape(ba.shape), 0, axis)
         return fx
 
     elif method in ["cardinal", "catmull-rom"]:
