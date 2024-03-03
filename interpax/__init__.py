@@ -1,12 +1,12 @@
 """interpax: interpolation and function approximation with JAX."""
 
 from . import _version
+from ._fd_derivs import approx_df
 from ._fourier import fft_interp1d, fft_interp2d
 from ._spline import (
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
-    approx_df,
     interp1d,
     interp2d,
     interp3d,
