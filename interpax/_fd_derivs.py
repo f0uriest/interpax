@@ -2,7 +2,6 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import lineax as lx
 from jax import jit
 
 
@@ -98,8 +97,7 @@ def _cubic2(x, f, axis):
     upper_diag = jnp.concatenate([one, dxflat[:-1]])
     lower_diag = jnp.concatenate([dxflat[1:], one])
 
-    A = lx.TridiagonalLinearOperator(diag, lower_diag, upper_diag)
-
+    A = jnp.diag(diag) + jnp.diag(upper_diag, k=1) + jnp.diag(lower_diag, k=-1)
     b = jnp.concatenate(
         [
             2 * jnp.take(df, jnp.array([0]), axis, mode="wrap"),
@@ -116,7 +114,7 @@ def _cubic2(x, f, axis):
     )
     ba = jnp.moveaxis(b, axis, 0)
     br = ba.reshape((b.shape[axis], -1))
-    solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal()).value
+    solve = lambda b: jnp.linalg.solve(A, b)
     fx = jnp.vectorize(solve, signature="(n)->(n)")(br.T).T
     fx = jnp.moveaxis(fx.reshape(ba.shape), 0, axis)
     return fx
