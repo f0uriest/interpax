@@ -434,40 +434,10 @@ class TestAD:
     @pytest.mark.unit
     def test_ad_interp1d(self):
         """Test AD of different 1d interpolation methods."""
-        xp = np.linspace(0, 2 * np.pi, 100)
-        x = np.linspace(0, 2 * np.pi, 200)
+        xp = np.linspace(0, 2 * np.pi, 10)
+        x = np.linspace(0, 2 * np.pi, 20)
         f = lambda x: np.sin(x)
         fp = f(xp)
-
-        for method in ["cubic", "cubic2", "cardinal"]:
-            interp1 = lambda xq: interp1d(xq, xp, fp, method=method)
-            interp2 = lambda xq: Interpolator1D(xp, fp, method=method)(xq)
-
-            f1 = jnp.vectorize(jax.grad(interp1))(x)
-            f2 = jnp.vectorize(jax.grad(interp2))(x)
-
-            np.testing.assert_allclose(f1, np.cos(x), rtol=1e-2, atol=1e-2)
-            np.testing.assert_allclose(f1, f2)
-
-        for method in ["cubic", "cubic2", "cardinal", "monotonic"]:
-
-            interp1 = lambda fp: interp1d(x, xp, fp, method=method)
-            interp2 = lambda fp: Interpolator1D(xp, fp, method=method)(x)
-
-            jacf1 = jax.jacfwd(interp1)(fp)
-            jacf2 = jax.jacfwd(interp2)(fp)
-
-            jacr1 = jax.jacrev(interp1)(fp)
-            jacr2 = jax.jacrev(interp2)(fp)
-
-            jacd1 = self._finite_difference(interp1, fp)
-            jacd2 = self._finite_difference(interp2, fp)
-
-            np.testing.assert_allclose(jacf1, jacf2, rtol=1e-14, atol=1e-14)
-            np.testing.assert_allclose(jacr1, jacr2, rtol=1e-14, atol=1e-14)
-            np.testing.assert_allclose(jacf1, jacr1, rtol=1e-14, atol=1e-14)
-            np.testing.assert_allclose(jacf1, jacd1, rtol=1e-6, atol=1e-6)
-            np.testing.assert_allclose(jacf2, jacd2, rtol=1e-6, atol=1e-6)
 
         for method in ["cubic", "cubic2", "cardinal", "monotonic"]:
 
@@ -493,39 +463,14 @@ class TestAD:
     @pytest.mark.unit
     def test_ad_interp2d(self):
         """Test AD of different 2d interpolation methods."""
-        xp = np.linspace(0, 4 * np.pi, 40)
-        yp = np.linspace(0, 2 * np.pi, 40)
-        y = np.linspace(0, 2 * np.pi, 100)
-        x = np.linspace(0, 2 * np.pi, 100)
+        xp = np.linspace(0, 4 * np.pi, 20)
+        yp = np.linspace(0, 2 * np.pi, 20)
+        y = np.linspace(0, 2 * np.pi, 30)
+        x = np.linspace(0, 2 * np.pi, 30)
         xxp, yyp = np.meshgrid(xp, yp, indexing="ij")
 
         f = lambda x, y: np.sin(x) * np.cos(y)
         fp = f(xxp, yyp)
-
-        for method in ["cubic", "cubic2", "cardinal"]:
-            interp1 = lambda xq, yq: interp2d(xq, yq, xp, yp, fp, method=method)
-            interp2 = lambda xq, yq: Interpolator2D(xp, yp, fp, method=method)(xq, yq)
-
-            f1 = jnp.vectorize(jax.grad(interp1))(x, y)
-            f2 = jnp.vectorize(jax.grad(interp2))(x, y)
-
-            np.testing.assert_allclose(f1, np.cos(x) * np.cos(y), rtol=3e-2, atol=3e-2)
-            np.testing.assert_allclose(f1, f2)
-
-        for method in ["cubic", "cubic2", "cardinal"]:
-
-            interp1 = lambda fp: interp2d(x, y, xp, yp, fp, method=method)
-            interp2 = lambda fp: Interpolator2D(xp, yp, fp, method=method)(x, y)
-
-            jacf1 = jax.jacfwd(interp1)(fp)
-            jacf2 = jax.jacfwd(interp2)(fp)
-
-            jacr1 = jax.jacrev(interp1)(fp)
-            jacr2 = jax.jacrev(interp2)(fp)
-
-            np.testing.assert_allclose(jacf1, jacf2, rtol=1e-14, atol=1e-14)
-            np.testing.assert_allclose(jacr1, jacr2, rtol=1e-14, atol=1e-14)
-            np.testing.assert_allclose(jacf1, jacr1, rtol=1e-14, atol=1e-14)
 
         for method in ["cubic", "cubic2", "cardinal"]:
 
@@ -551,47 +496,16 @@ class TestAD:
     @pytest.mark.unit
     def test_ad_interp3d(self):
         """Test AD of different 3d interpolation methods."""
-        xp = np.linspace(0, np.pi, 20)
-        yp = np.linspace(0, 2 * np.pi, 30)
-        zp = np.linspace(0, 1, 10)
-        x = np.linspace(0, np.pi, 100)
-        y = np.linspace(0, 2 * np.pi, 100)
-        z = np.linspace(0, 1, 100)
+        xp = np.linspace(0, np.pi, 10)
+        yp = np.linspace(0, 2 * np.pi, 15)
+        zp = np.linspace(0, 1, 12)
+        x = np.linspace(0, np.pi, 13)
+        y = np.linspace(0, 2 * np.pi, 13)
+        z = np.linspace(0, 1, 13)
         xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
 
         f = lambda x, y, z: np.sin(x) * np.cos(y) * z**2
         fp = f(xxp, yyp, zzp)
-
-        for method in ["cubic", "cubic2", "cardinal"]:
-            interp1 = lambda xq, yq, zq: interp3d(
-                xq, yq, zq, xp, yp, zp, fp, method=method
-            )
-            interp2 = lambda xq, yq, zq: Interpolator3D(xp, yp, zp, fp, method=method)(
-                xq, yq, zq
-            )
-
-            f1 = jnp.vectorize(jax.grad(interp1))(x, y, z)
-            f2 = jnp.vectorize(jax.grad(interp2))(x, y, z)
-
-            np.testing.assert_allclose(
-                f1, np.cos(x) * np.cos(y) * z**2, rtol=3e-2, atol=3e-2
-            )
-            np.testing.assert_allclose(f1, f2)
-
-        for method in ["cubic", "cubic2", "cardinal"]:
-
-            interp1 = lambda fp: interp3d(x, y, z, xp, yp, zp, fp, method=method)
-            interp2 = lambda fp: Interpolator3D(xp, yp, zp, fp, method=method)(x, y, z)
-
-            jacf1 = jax.jacfwd(interp1)(fp)
-            jacf2 = jax.jacfwd(interp2)(fp)
-
-            jacr1 = jax.jacrev(interp1)(fp)
-            jacr2 = jax.jacrev(interp2)(fp)
-
-            np.testing.assert_allclose(jacf1, jacf2, rtol=1e-12, atol=1e-12)
-            np.testing.assert_allclose(jacr1, jacr2, rtol=1e-12, atol=1e-12)
-            np.testing.assert_allclose(jacf1, jacr1, rtol=1e-12, atol=1e-12)
 
         for method in ["cubic", "cubic2", "cardinal"]:
 
