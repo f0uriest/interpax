@@ -29,6 +29,7 @@ def approx_df(
           data, and will not introduce new extrema in the interpolated points
         - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
           both endpoints
+        - ``'akima'``: C1 cubic splines that appear smooth and natural
 
     axis : int
         Axis along which f is varying.
@@ -51,6 +52,8 @@ def approx_df(
         out = _monotonic(x, f, axis, False, **kwargs)
     elif method == "monotonic-0":
         out = _monotonic(x, f, axis, True, **kwargs)
+    elif method == "akima":
+        out = _akima(x, f, axis, **kwargs)
     elif method in ("nearest", "linear"):
         out = jnp.zeros_like(f)
     else:
@@ -151,11 +154,10 @@ def _monotonic(x, f, axis, zero_slope):
         x = x[:, None]
         f = f[:, None]
     hk = x[1:] - x[:-1]
-    df = jnp.diff(f, axis=axis)
+    df = jnp.diff(f, axis=0)
     hki = jnp.where(hk == 0, 0, 1 / hk)
     if df.ndim > hki.ndim:
         hki = jnp.expand_dims(hki, tuple(range(1, df.ndim)))
-        hki = jnp.moveaxis(hki, 0, axis)
 
     mk = hki * df
 
@@ -167,9 +169,7 @@ def _monotonic(x, f, axis, zero_slope):
 
     if df.ndim > w1.ndim:
         w1 = jnp.expand_dims(w1, tuple(range(1, df.ndim)))
-        w1 = jnp.moveaxis(w1, 0, axis)
         w2 = jnp.expand_dims(w2, tuple(range(1, df.ndim)))
-        w2 = jnp.moveaxis(w2, 0, axis)
 
     whmean = (w1 / mk[:-1, :] + w2 / mk[1:, :]) / (w1 + w2)
 
@@ -201,4 +201,40 @@ def _monotonic(x, f, axis, zero_slope):
 
     dk = jnp.concatenate([d0, dk, d1])
     dk = dk.reshape(fshp)
-    return dk.reshape(fshp)
+    return jnp.moveaxis(dk, 0, axis)
+
+
+def _akima(x, f, axis):
+    # Original implementation in MATLAB by N. Shamsundar (BSD licensed), see
+    # https://www.mathworks.com/matlabcentral/fileexchange/1814-akima-interpolation
+    dx = jnp.diff(x)
+    f = jnp.moveaxis(f, axis, 0)
+    # determine slopes between breakpoints
+    m = jnp.empty((x.size + 3,) + f.shape[1:])
+    dx = dx[(slice(None),) + (None,) * (f.ndim - 1)]
+    mask = dx == 0
+    dx = jnp.where(mask, 1, dx)
+    dxi = jnp.where(mask, 0.0, 1 / dx)
+    m = m.at[2:-2].set(jnp.diff(f, axis=0) * dxi)
+
+    # add two additional points on the left ...
+    m = m.at[1].set(2.0 * m[2] - m[3])
+    m = m.at[0].set(2.0 * m[1] - m[2])
+    # ... and on the right
+    m = m.at[-2].set(2.0 * m[-3] - m[-4])
+    m = m.at[-1].set(2.0 * m[-2] - m[-3])
+
+    # df = derivative of f at x
+    # df = (|m4 - m3| * m2 + |m2 - m1| * m3) / (|m4 - m3| + |m2 - m1|)
+    # if m1 == m2 != m3 == m4, the slope at the breakpoint is not
+    # defined. Use instead 1/2(m2 + m3)
+    dm = jnp.abs(jnp.diff(m, axis=0))
+    m2 = m[1:-2]
+    m3 = m[2:-1]
+    m4m3 = dm[2:]  # |m4 - m3|
+    m2m1 = dm[:-2]  # |m2 - m1|
+    f12 = m4m3 + m2m1
+    mask = f12 > 1e-9 * jnp.max(f12, initial=-jnp.inf)
+    df = (m4m3 * m2 + m2m1 * m3) / jnp.where(mask, f12, 1.0)
+    df = jnp.where(mask, df, 0.5 * (m[3:] + m[:-3]))
+    return jnp.moveaxis(df, 0, axis)

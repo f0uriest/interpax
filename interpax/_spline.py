@@ -14,9 +14,17 @@ from ._coefs import A_BICUBIC, A_CUBIC, A_TRICUBIC
 from ._fd_derivs import approx_df
 from .utils import errorif, isbool
 
-CUBIC_METHODS = ("cubic", "cubic2", "cardinal", "catmull-rom")
+CUBIC_METHODS = (
+    "cubic",
+    "cubic2",
+    "cardinal",
+    "catmull-rom",
+    "akima",
+    "monotonic",
+    "monotonic-0",
+)
 OTHER_METHODS = ("nearest", "linear")
-METHODS_1D = CUBIC_METHODS + OTHER_METHODS + ("monotonic", "monotonic-0")
+METHODS_1D = CUBIC_METHODS + OTHER_METHODS
 METHODS_2D = CUBIC_METHODS + OTHER_METHODS
 METHODS_3D = CUBIC_METHODS + OTHER_METHODS
 
@@ -44,6 +52,7 @@ class Interpolator1D(eqx.Module):
           data, and will not introduce new extrema in the interpolated points
         - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
           both endpoints
+        - ``'akima'``: C1 cubic splines that appear smooth and natural
 
     extrap : bool, float, array-like
         whether to extrapolate values beyond knots (True) or return nan (False),
@@ -149,6 +158,11 @@ class Interpolator2D(eqx.Module):
         - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
         - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
           keyword parameter ``c`` in float[0,1] to specify tension
+        - ``'monotonic'``: C1 cubic splines that attempt to preserve monotonicity in the
+          data, and will not introduce new extrema in the interpolated points
+        - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
+          both endpoints
+        - ``'akima'``: C1 cubic splines that appear smooth and natural
 
     extrap : bool, float, array-like
         whether to extrapolate values beyond knots (True) or return nan (False),
@@ -273,6 +287,11 @@ class Interpolator3D(eqx.Module):
         - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
         - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
           keyword parameter ``c`` in float[0,1] to specify tension
+        - ``'monotonic'``: C1 cubic splines that attempt to preserve monotonicity in the
+          data, and will not introduce new extrema in the interpolated points
+        - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
+          both endpoints
+        - ``'akima'``: C1 cubic splines that appear smooth and natural
 
     extrap : bool, float, array-like
         whether to extrapolate values beyond knots (True) or return nan (False),
@@ -448,6 +467,7 @@ def interp1d(
           data, and will not introduce new extrema in the interpolated points
         - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
           both endpoints
+        - ``'akima'``: C1 cubic splines that appear smooth and natural
 
     derivative : int >= 0
         derivative order to calculate
@@ -532,7 +552,7 @@ def interp1d(
 
         fq = jax.lax.switch(derivative, [derivative0, derivative1, derivative2])
 
-    elif method in (CUBIC_METHODS + ("monotonic", "monotonic-0")):
+    elif method in CUBIC_METHODS:
 
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
@@ -595,6 +615,11 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
         - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
           keyword parameter ``c`` in float[0,1] to specify tension
+        - ``'monotonic'``: C1 cubic splines that attempt to preserve monotonicity in the
+          data, and will not introduce new extrema in the interpolated points
+        - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
+          both endpoints
+        - ``'akima'``: C1 cubic splines that appear smooth and natural
 
     derivative : int >= 0 or array-like, shape(2,)
         derivative order to calculate in x, y. Use a single value for the same in both
@@ -805,6 +830,11 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         - ``'catmull-rom'``: C1 cubic centripetal "tension" splines
         - ``'cardinal'``: C1 cubic general tension splines. If used, can also pass
           keyword parameter ``c`` in float[0,1] to specify tension
+        - ``'monotonic'``: C1 cubic splines that attempt to preserve monotonicity in the
+          data, and will not introduce new extrema in the interpolated points
+        - ``'monotonic-0'``: same as ``'monotonic'`` but with 0 first derivatives at
+          both endpoints
+        - ``'akima'``: C1 cubic splines that appear smooth and natural
 
     derivative : int >= 0, array-like, shape(3,)
         derivative order to calculate in x,y,z directions. Use a single value for the
