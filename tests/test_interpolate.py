@@ -65,6 +65,9 @@ class TestInterp1D:
             fq = interp(x, xp, fp, method="monotonic-0")
             np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-2)
 
+            fq = interp(x, xp, fp, method="akima")
+            np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=2e-5)
+
     @pytest.mark.unit
     def test_interp1d_vector_valued(self):
         """Test for interpolating vector valued function."""
@@ -187,6 +190,12 @@ class TestInterp2D:
                 x, y, xp, yp, fp, method="cardinal", period=(2 * np.pi, 2 * np.pi)
             )
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
+            fq = interp(x, y, xp, yp, fp, method="akima", period=(2 * np.pi, 2 * np.pi))
+            np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
+            fq = interp(
+                x, y, xp, yp, fp, method="monotonic", period=(2 * np.pi, 2 * np.pi)
+            )
+            np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1e-3)
 
     @pytest.mark.unit
     def test_interp2d_vector_valued(self):
