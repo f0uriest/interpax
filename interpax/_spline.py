@@ -12,7 +12,7 @@ from jax import jit
 
 from ._coefs import A_BICUBIC, A_CUBIC, A_TRICUBIC
 from ._fd_derivs import approx_df
-from .utils import errorif, isbool
+from .utils import asarray_inexact, errorif, isbool
 
 CUBIC_METHODS = (
     "cubic",
@@ -63,11 +63,6 @@ class Interpolator1D(eqx.Module):
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
 
-    Notes
-    -----
-    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
-    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
-
     """
 
     x: jax.Array
@@ -87,7 +82,7 @@ class Interpolator1D(eqx.Module):
         period: Union[None, float] = None,
         **kwargs,
     ):
-        x, f = map(jnp.asarray, (x, f))
+        x, f = map(asarray_inexact, (x, f))
         axis = kwargs.get("axis", 0)
         fx = kwargs.pop("fx", None)
 
@@ -174,11 +169,6 @@ class Interpolator2D(eqx.Module):
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
 
-    Notes
-    -----
-    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
-    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
-
     """
 
     x: jax.Array
@@ -200,7 +190,7 @@ class Interpolator2D(eqx.Module):
         period: Union[None, float, tuple] = None,
         **kwargs,
     ):
-        x, y, f = map(jnp.asarray, (x, y, f))
+        x, y, f = map(asarray_inexact, (x, y, f))
         axis = kwargs.get("axis", 0)
         fx = kwargs.pop("fx", None)
         fy = kwargs.pop("fy", None)
@@ -303,11 +293,6 @@ class Interpolator3D(eqx.Module):
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
 
-    Notes
-    -----
-    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
-    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
-
     """
 
     x: jax.Array
@@ -331,7 +316,7 @@ class Interpolator3D(eqx.Module):
         period: Union[None, float, tuple] = None,
         **kwargs,
     ):
-        x, y, z, f = map(jnp.asarray, (x, y, z, f))
+        x, y, z, f = map(asarray_inexact, (x, y, z, f))
         axis = kwargs.get("axis", 0)
 
         errorif(
@@ -491,7 +476,7 @@ def interp1d(
     which caches the calculation of the derivatives and spline coefficients.
 
     """
-    xq, x, f = map(jnp.asarray, (xq, x, f))
+    xq, x, f = map(asarray_inexact, (xq, x, f))
     axis = kwargs.get("axis", 0)
     fx = kwargs.pop("fx", None)
     outshape = xq.shape + f.shape[1:]
@@ -646,7 +631,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     coefficients.
 
     """
-    xq, yq, x, y, f = map(jnp.asarray, (xq, yq, x, y, f))
+    xq, yq, x, y, f = map(asarray_inexact, (xq, yq, x, y, f))
     fx = kwargs.pop("fx", None)
     fy = kwargs.pop("fy", None)
     fxy = kwargs.pop("fxy", None)
@@ -861,7 +846,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     coefficients.
 
     """
-    xq, yq, zq, x, y, z, f = map(jnp.asarray, (xq, yq, zq, x, y, z, f))
+    xq, yq, zq, x, y, z, f = map(asarray_inexact, (xq, yq, zq, x, y, z, f))
     errorif(
         (len(x) != f.shape[0]) or (x.ndim != 1),
         ValueError,

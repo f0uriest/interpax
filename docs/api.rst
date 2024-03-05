@@ -2,38 +2,65 @@
 API Documentation
 =================
 
-interp1d
-********
-.. autofunction:: interpax.interp1d
+Interpolation of 1D, 2D, or 3D data
+-----------------------------------
 
-interp2d
-********
-.. autofunction:: interpax.interp2d
+.. autosummary::
+    :toctree: _api/
+    :recursive:
+    :template: class.rst
 
-interp3d
-********
-.. autofunction:: interpax.interp3d
+    interpax.Interpolator1D
+    interpax.Interpolator2D
+    interpax.Interpolator3D
 
-fft_interp1d
-************
-.. autofunction:: interpax.fft_interp1d
 
-fft_interp2d
-************
-.. autofunction:: interpax.fft_interp2d
+``scipy.interpolate``-like classes
+----------------------------------
 
-approx_df
-*********
-.. autofunction:: interpax.approx_df
+These classes implement most of the functionality of the SciPy classes with the same names,
+except where noted in the documentation.
 
-Interpolator1D
-**************
-.. autoclass:: interpax.Interpolator1D
+.. autosummary::
+    :toctree: _api/
+    :recursive:
+    :template: class.rst
 
-Interpolator2D
-**************
-.. autoclass:: interpax.Interpolator2D
+    interpax.Akima1DInterpolator
+    interpax.CubicHermiteSpline
+    interpax.CubicSpline
+    interpax.PchipInterpolator
+    interpax.PPoly
 
-Interpolator3D
-**************
-.. autoclass:: interpax.Interpolator3D
+
+Functional interface for 1D, 2D, 3D interpolation
+-------------------------------------------------
+
+.. autosummary::
+    :toctree: _api/
+    :recursive:
+
+    interpax.interp1d
+    interpax.interp2d
+    interpax.interp2d
+
+
+Fourier interpolation of periodic functions in 1D and 2D
+--------------------------------------------------------
+
+.. autosummary::
+    :toctree: _api/
+    :recursive:
+
+    interpax.fft_interp1d
+    interpax.fft_interp2d
+
+
+Approximating first derivatives for cubic splines
+-------------------------------------------------
+
+.. autosummary::
+    :toctree: _api/
+    :recursive:
+
+    interpax.approx_df
