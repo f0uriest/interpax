@@ -63,11 +63,6 @@ class Interpolator1D(eqx.Module):
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
 
-    Notes
-    -----
-    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
-    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
-
     """
 
     x: jax.Array
@@ -173,11 +168,6 @@ class Interpolator2D(eqx.Module):
         periodicity of the function in x, y directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
-
-    Notes
-    -----
-    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
-    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
 
     """
 
@@ -302,11 +292,6 @@ class Interpolator3D(eqx.Module):
         periodicity of the function in x, y, z directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
-
-    Notes
-    -----
-    This class is registered as a PyTree in JAX (it is actually an equinox.Module)
-    so should be compatible with standard JAX transformations (jit, grad, vmap, etc.)
 
     """
 
