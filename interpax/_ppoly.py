@@ -44,7 +44,7 @@ import jax.numpy as jnp
 from jax import jit
 
 from ._coefs import A_CUBIC
-from ._spline import approx_df
+from ._fd_derivs import approx_df
 from .utils import asarray_inexact, errorif
 
 
@@ -562,7 +562,7 @@ class CubicHermiteSpline(PPoly):
         # So we roll two of them.
         c = jnp.moveaxis(c, 0, axis + 1)  # (m, ..., k)
         c = jnp.moveaxis(c, 0, axis + 1)  # (..., k, m, ...)
-        super().__init__(c, x, extrapolate=extrapolate, axis=axis)
+        super().__init__(c, x, extrapolate=extrapolate, axis=axis, check=check)
 
 
 class PchipInterpolator(CubicHermiteSpline):
@@ -645,7 +645,7 @@ class PchipInterpolator(CubicHermiteSpline):
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
         dydx = approx_df(x, y, "monotonic", axis=axis)
-        super().__init__(x, y, dydx, axis=axis, extrapolate=extrapolate)
+        super().__init__(x, y, dydx, axis=axis, extrapolate=extrapolate, check=check)
 
 
 class Akima1DInterpolator(CubicHermiteSpline):
@@ -703,7 +703,7 @@ class Akima1DInterpolator(CubicHermiteSpline):
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
         t = approx_df(x, y, method="akima", axis=axis)
-        super().__init__(x, y, t, axis=axis, extrapolate=extrapolate)
+        super().__init__(x, y, t, axis=axis, extrapolate=extrapolate, check=check)
 
 
 class CubicSpline(CubicHermiteSpline):
@@ -802,4 +802,4 @@ class CubicSpline(CubicHermiteSpline):
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
         df = approx_df(x, y, "cubic2", axis, bc_type=bc_type)
-        super().__init__(x, y, df, axis=axis, extrapolate=extrapolate)
+        super().__init__(x, y, df, axis=axis, extrapolate=extrapolate, check=check)
