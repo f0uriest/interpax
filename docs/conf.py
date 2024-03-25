@@ -159,7 +159,6 @@ napoleon_use_rtype = False
 
 autodoc_default_options = {
     "member-order": "bysource",
-    "special-members": "__call__",
     "exclude-members": "__init__",
 }
 # Add any paths that contain templates here, relative to this directory.

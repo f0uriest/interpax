@@ -1,6 +1,19 @@
 Changelog
 =========
 
+- Adds a number of classes that replicate most of the functionality of the
+corresponding classes from scipy.interpolate :
+  - ``scipy.interpolate.PPoly`` -> ``interpax.PPoly``
+  - ``scipy.interpolate.Akima1DInterpolator`` -> ``interpax.Akima1DInterpolator``
+  - ``scipy.interpolate.CubicHermiteSpline`` -> ``interpax.CubicHermiteSpline``
+  - ``scipy.interpolate.CubicSpline`` -> ``interpax.CubicSpline``
+  - ``scipy.interpolate.PchipInterpolator`` -> ``interpax.PchipInterpolator``
+- Method ``"akima"`` now available for ``Interpolator.{1D, 2D, 3D}`` and corresponding
+functions.
+- Method ``"monotonic"`` now works in 2D and 3D, where it will preserve monotonicity
+with respect to each coordinate individually.
+
+
 v0.2.4
 ------
 - Fixes for scalar valued query points

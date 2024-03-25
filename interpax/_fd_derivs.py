@@ -1,11 +1,9 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import lineax as lx
 from jax import jit
 
-from .utils import errorif
+from .utils import asarray_inexact, errorif
 
 
 def approx_df(
@@ -43,10 +41,13 @@ def approx_df(
         First derivative of f with respect to x.
 
     """
-    return _approx_df(x, f, method, axis, **kwargs)
+    # close over static args to deal with non-jittable kwargs
+    def fun(x, f):
+        return _approx_df(x, f, method, axis, **kwargs)
+
+    return jit(fun)(x, f)
 
 
-@partial(jit, static_argnames=("method", "axis", "bc_type"))
 def _approx_df(x, f, method, axis, c=0, bc_type="not-a-knot"):
     if method == "cubic":
         out = _cubic1(x, f, axis)
@@ -93,7 +94,7 @@ def _cubic1(x, f, axis):
     return fx
 
 
-def _validate_bc(bc_type, expected_deriv_shape):
+def _validate_bc(bc_type, expected_deriv_shape, dtype):
     if isinstance(bc_type, str):
         errorif(bc_type == "periodic", NotImplementedError)
         bc_type = (bc_type, bc_type)
@@ -137,7 +138,8 @@ def _validate_bc(bc_type, expected_deriv_shape):
             if deriv_order not in [1, 2]:
                 raise ValueError("The specified derivative order must " "be 1 or 2.")
 
-            deriv_value = jnp.asarray(deriv_value)
+            deriv_value = asarray_inexact(deriv_value)
+            dtype = jnp.promote_types(dtype, deriv_value.dtype)
             if deriv_value.shape != expected_deriv_shape:
                 raise ValueError(
                     "`deriv_value` shape {} is not the expected one {}.".format(
@@ -145,12 +147,12 @@ def _validate_bc(bc_type, expected_deriv_shape):
                     )
                 )
             validated_bc.append((deriv_order, deriv_value))
-    return validated_bc
+    return validated_bc, dtype
 
 
 def _cubic2(x, f, axis, bc_type):
     f = jnp.moveaxis(f, axis, 0)
-    bc = _validate_bc(bc_type, f.shape[1:])
+    bc, dtype = _validate_bc(bc_type, f.shape[1:], f.dtype)
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=0)
     dxr = dx.reshape([dx.shape[0]] + [1] * (f.ndim - 1))
@@ -174,7 +176,7 @@ def _cubic2(x, f, axis, bc_type):
     # constructing a parabola passing through given points.
     if n == 3 and bc[0] == "not-a-knot" and bc[1] == "not-a-knot":
         A = jnp.zeros((3, 3))  # This is a standard matrix.
-        b = jnp.empty((3,) + f.shape[1:], dtype=f.dtype)
+        b = jnp.empty((3,) + f.shape[1:], dtype=dtype)
 
         A = A.at[0, 0].set(1)
         A = A.at[0, 1].set(1)
@@ -188,20 +190,21 @@ def _cubic2(x, f, axis, bc_type):
         b = b.at[1].set(3 * (dxr[0] * df[1] + dxr[1] * df[0]))
         b = b.at[2].set(2 * df[1])
 
-        s = jnp.linalg.solve(A, b)
-        fx = jnp.moveaxis(s, 0, axis)
+        solve = lambda b: jnp.linalg.solve(A, b)
+        fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
+        fx = jnp.moveaxis(fx, 0, axis)
 
     else:
 
         # Find derivative values at each x[i] by solving a tridiagonal
         # system.
-        diag = jnp.zeros(n)
+        diag = jnp.zeros(n, dtype=x.dtype)
         diag = diag.at[1:-1].set(2 * (dx[:-1] + dx[1:]))
-        upper_diag = jnp.zeros(n - 1)
+        upper_diag = jnp.zeros(n - 1, dtype=x.dtype)
         upper_diag = upper_diag.at[1:].set(dx[:-1])
-        lower_diag = jnp.zeros(n - 1)
+        lower_diag = jnp.zeros(n - 1, dtype=x.dtype)
         lower_diag = lower_diag.at[:-1].set(dx[1:])
-        b = jnp.zeros((n,) + f.shape[1:], dtype=f.dtype)
+        b = jnp.zeros((n,) + f.shape[1:], dtype=dtype)
         b = b.at[1:-1].set(3 * (dxr[1:] * df[:-1] + dxr[:-1] * df[1:]))
 
         bc_start, bc_end = bc
