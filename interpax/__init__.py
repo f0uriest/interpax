@@ -9,6 +9,7 @@ from ._ppoly import (
     CubicSpline,
     PchipInterpolator,
     PPoly,
+    SmoothingSpline,
 )
 from ._spline import (
     Interpolator1D,

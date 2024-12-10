@@ -40,6 +40,8 @@ def approx_df(
         First derivative of f with respect to x.
 
     """
+    # noqa:D202
+
     # close over static args to deal with non-jittable kwargs
     def fun(x, f):
         return _approx_df(x, f, method, axis, **kwargs)
