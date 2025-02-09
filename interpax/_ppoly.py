@@ -54,7 +54,7 @@ class PPoly(eqx.Module):
     The polynomial between ``x[i]`` and ``x[i + 1]`` is written in the
     local power basis::
 
-        S = sum(c[m, i] * (xp - x[i])**(k-m) for m in range(k+1))
+        S = sum(c[m, i] * (xp - x[i]) ** (k - m) for m in range(k + 1))
 
     where ``k`` is the degree of the polynomial.
 
@@ -90,7 +90,7 @@ class PPoly(eqx.Module):
         self,
         c: jax.Array,
         x: jax.Array,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Union[None, bool, str] = None,
         axis: int = 0,
         check: bool = True,
     ):
@@ -134,7 +134,6 @@ class PPoly(eqx.Module):
         )
 
         if check:
-
             dx = jnp.diff(x)
             errorif(
                 jnp.any(dx < 0), ValueError, "`x` must be strictly increasing sequence."
@@ -170,7 +169,7 @@ class PPoly(eqx.Module):
         cls,
         c: jax.Array,
         x: jax.Array,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Union[None, bool, str] = None,
         axis: int = 0,
     ):
         """Construct the piecewise polynomial without making checks.
@@ -188,7 +187,9 @@ class PPoly(eqx.Module):
         return self
 
     @partial(jit, static_argnames=("nu", "extrapolate"))
-    def __call__(self, x: jax.Array, nu: int = 0, extrapolate: Union[bool, str] = None):
+    def __call__(
+        self, x: jax.Array, nu: int = 0, extrapolate: Union[None, bool, str] = None
+    ):
         """Evaluate the piecewise polynomial or its derivative.
 
         Parameters
@@ -341,7 +342,7 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, extrapolate, self.axis)
 
-    def integrate(self, a: float, b: float, extrapolate: Union[bool, str] = None):
+    def integrate(self, a: float, b: float, extrapolate: Union[None, bool, str] = None):
         """Compute a definite integral over a piecewise polynomial.
 
         Parameters
@@ -539,7 +540,7 @@ class CubicHermiteSpline(PPoly):
         y: jax.Array,
         dydx: jax.Array,
         axis: int = 0,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Union[None, bool, str] = None,
         check: bool = True,
     ):
         if extrapolate is None:
@@ -640,7 +641,7 @@ class PchipInterpolator(CubicHermiteSpline):
         x: jax.Array,
         y: jax.Array,
         axis: int = 0,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Union[None, bool, str] = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -698,7 +699,7 @@ class Akima1DInterpolator(CubicHermiteSpline):
         x: jax.Array,
         y: jax.Array,
         axis: int = 0,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Union[None, bool, str] = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -797,7 +798,7 @@ class CubicSpline(CubicHermiteSpline):
         y: jax.Array,
         axis: int = 0,
         bc_type: Union[str, tuple] = "not-a-knot",
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Union[None, bool, str] = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)

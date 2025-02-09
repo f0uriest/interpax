@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -6,7 +7,7 @@ from jax import jit
 
 
 @partial(jit, static_argnames="n")
-def fft_interp1d(f: jax.Array, n: int, sx: jax.Array = None, dx: float = 1.0):
+def fft_interp1d(f: jax.Array, n: int, sx: Optional[jax.Array] = None, dx: float = 1.0):
     """Interpolation of a 1d periodic function via FFT.
 
     Parameters
@@ -43,8 +44,8 @@ def fft_interp2d(
     f: jax.Array,
     n1: int,
     n2: int,
-    sx: jax.Array = None,
-    sy: jax.Array = None,
+    sx: Optional[jax.Array] = None,
+    sy: Optional[jax.Array] = None,
     dx: float = 1.0,
     dy: float = 1.0,
 ):

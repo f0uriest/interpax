@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 from functools import partial
-from typing import Union
+from typing import Optional, Union
 
 import equinox as eqx
 import jax
@@ -70,7 +70,7 @@ class Interpolator1D(eqx.Module):
     derivs: dict
     method: str
     extrap: Union[bool, float, tuple]
-    period: Union[None, float]
+    period: Optional[float]
     axis: int
 
     def __init__(
@@ -79,7 +79,7 @@ class Interpolator1D(eqx.Module):
         f: jax.Array,
         method: str = "cubic",
         extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float] = None,
+        period: Optional[float] = None,
         **kwargs,
     ):
         x, f = map(asarray_inexact, (x, f))
@@ -425,7 +425,7 @@ def interp1d(
     method: str = "cubic",
     derivative: int = 0,
     extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float] = None,
+    period: Optional[float] = None,
     **kwargs,
 ):
     """Interpolate a 1d function.
@@ -538,7 +538,6 @@ def interp1d(
         fq = jax.lax.switch(derivative, [derivative0, derivative1, derivative2])
 
     elif method in CUBIC_METHODS:
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
             fx = approx_df(x, f, method, axis, **kwargs)
@@ -693,7 +692,6 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
 
@@ -943,7 +941,6 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
         k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
