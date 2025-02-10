@@ -36,7 +36,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
 from functools import partial
-from typing import Union
+from typing import Literal, Optional, Union
 
 import equinox as eqx
 import jax
@@ -93,7 +93,7 @@ class PPoly(eqx.Module):
         extrapolate: Union[None, bool, str] = None,
         axis: int = 0,
         check: bool = True,
-    ):
+    ) -> None:
         c = asarray_inexact(c)
         x = asarray_inexact(x)
 
@@ -171,7 +171,7 @@ class PPoly(eqx.Module):
         x: jax.Array,
         extrapolate: Union[None, bool, str] = None,
         axis: int = 0,
-    ):
+    ) -> "PPoly":
         """Construct the piecewise polynomial without making checks.
 
         Takes the same parameters as the constructor. Input arguments
@@ -189,7 +189,7 @@ class PPoly(eqx.Module):
     @partial(jit, static_argnames=("nu", "extrapolate"))
     def __call__(
         self, x: jax.Array, nu: int = 0, extrapolate: Union[None, bool, str] = None
-    ):
+    ) -> jax.Array:
         """Evaluate the piecewise polynomial or its derivative.
 
         Parameters
@@ -253,7 +253,7 @@ class PPoly(eqx.Module):
             y = y.transpose(l)
         return y
 
-    def derivative(self, nu: int = 1):
+    def derivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the derivative.
 
         Parameters
@@ -280,11 +280,11 @@ class PPoly(eqx.Module):
             return self.antiderivative(-nu)
 
         if nu == 0:
-            c2 = self.c.copy()
+            c2: jax.Array = self.c.copy()
         else:
-            c2 = jnp.vectorize(lambda x: jnp.polyder(x, nu), signature="(n)->(m)")(
-                self.c.T
-            ).T
+            c2: jax.Array = jnp.vectorize(
+                lambda x: jnp.polyder(x, nu), signature="(n)->(m)"
+            )(self.c.T).T
 
         if c2.shape[0] == 0:
             # derivative of order 0 is zero
@@ -292,7 +292,7 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, self.extrapolate, self.axis)
 
-    def antiderivative(self, nu: int = 1):
+    def antiderivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the antiderivative.
 
         Antiderivative is also the indefinite integral of the function,
@@ -342,7 +342,12 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, extrapolate, self.axis)
 
-    def integrate(self, a: float, b: float, extrapolate: Union[None, bool, str] = None):
+    def integrate(
+        self,
+        a: float,
+        b: float,
+        extrapolate: Union[None, bool, Literal["periodic"]] = None,
+    ) -> jax.Array:
         """Compute a definite integral over a piecewise polynomial.
 
         Parameters
@@ -380,17 +385,17 @@ class PPoly(eqx.Module):
             interval = b - a
             n_periods, left = jnp.divmod(interval, period)
 
-            def truefun():
+            def truefun() -> jax.Array:
                 return (integral(xe) - integral(xs)) * n_periods
 
-            def falsefun():
+            def falsefun() -> jax.Array:
                 return (
                     jnp.zeros(self.c.shape[2:])
                     if self.c.shape[2:]
                     else jnp.array([0.0])
                 )
 
-            out = jax.lax.cond(n_periods > 0, truefun, falsefun)
+            out: jax.Array = jax.lax.cond(n_periods > 0, truefun, falsefun)
 
             # Map a to [xs, xe], b is always a + left.
             a = xs + (a - xs) % period
@@ -399,17 +404,17 @@ class PPoly(eqx.Module):
             # If b <= xe then we need to integrate over [a, b], otherwise
             # over [a, xe] and from xs to what is remained.
 
-            def truefun(out):
+            def truefun(out: jax.Array) -> jax.Array:
                 return out + (integral(b) - integral(a))
 
-            def falsefun(out):
+            def falsefun(out: jax.Array) -> jax.Array:
                 out += integral(xe) - integral(a)
                 out += integral(xs + left + a - xe) - integral(xs)
                 return out
 
-            out = jax.lax.cond(b <= xe, truefun, falsefun, out)
+            out: jax.Array = jax.lax.cond(b <= xe, truefun, falsefun, out)
         else:
-            out = integral(b, extrapolate=extrapolate) - integral(
+            out: jax.Array = integral(b, extrapolate=extrapolate) - integral(
                 a, extrapolate=extrapolate
             )
 
@@ -438,7 +443,13 @@ class PPoly(eqx.Module):
         raise NotImplementedError
 
 
-def prepare_input(x, y, axis, dydx=None, check=True):
+def prepare_input(
+    x: jax.Array,
+    y: jax.Array,
+    axis: int,
+    dydx: Optional[jax.Array] = None,
+    check: bool = True,
+) -> tuple[jax.Array, jax.Array, jax.Array, int, Optional[jax.Array]]:
     """Prepare input for cubic spline interpolators.
 
     All data are converted to numpy arrays and checked for correctness.
@@ -542,7 +553,7 @@ class CubicHermiteSpline(PPoly):
         axis: int = 0,
         extrapolate: Union[None, bool, str] = None,
         check: bool = True,
-    ):
+    ) -> None:
         if extrapolate is None:
             extrapolate = True
 
@@ -643,7 +654,7 @@ class PchipInterpolator(CubicHermiteSpline):
         axis: int = 0,
         extrapolate: Union[None, bool, str] = None,
         check: bool = True,
-    ):
+    ) -> None:
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
         dydx = approx_df(x, y, "monotonic", axis=axis)
         super().__init__(x, y, dydx, axis=axis, extrapolate=extrapolate, check=check)
@@ -701,7 +712,7 @@ class Akima1DInterpolator(CubicHermiteSpline):
         axis: int = 0,
         extrapolate: Union[None, bool, str] = None,
         check: bool = True,
-    ):
+    ) -> None:
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
         t = approx_df(x, y, method="akima", axis=axis)
         super().__init__(x, y, t, axis=axis, extrapolate=extrapolate, check=check)
@@ -800,7 +811,7 @@ class CubicSpline(CubicHermiteSpline):
         bc_type: Union[str, tuple] = "not-a-knot",
         extrapolate: Union[None, bool, str] = None,
         check: bool = True,
-    ):
+    ) -> None:
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
         df = approx_df(x, y, "cubic2", axis, bc_type=bc_type)
         super().__init__(x, y, df, axis=axis, extrapolate=extrapolate, check=check)

@@ -7,7 +7,12 @@ from jax import jit
 
 
 @partial(jit, static_argnames="n")
-def fft_interp1d(f: jax.Array, n: int, sx: Optional[jax.Array] = None, dx: float = 1.0):
+def fft_interp1d(
+    f: jax.Array,
+    n: int,
+    sx: Optional[jax.Array] = None,
+    dx: float = 1.0,
+) -> jax.Array:
     """Interpolation of a 1d periodic function via FFT.
 
     Parameters
@@ -48,7 +53,7 @@ def fft_interp2d(
     sy: Optional[jax.Array] = None,
     dx: float = 1.0,
     dy: float = 1.0,
-):
+) -> jax.Array:
     """Interpolation of a 2d periodic function via FFT.
 
     Parameters
@@ -92,7 +97,9 @@ def fft_interp2d(
     return jnp.fft.fft2(c, axes=(0, 1)).real
 
 
-def _pad_along_axis(array: jax.Array, pad: tuple = (0, 0), axis: int = 0):
+def _pad_along_axis(
+    array: jax.Array, pad: tuple[int, int] = (0, 0), axis: int = 0
+) -> jax.Array:
     """Pad with zeros or truncate a given dimension."""
     array = jnp.moveaxis(array, axis, 0)
 
