@@ -90,7 +90,7 @@ class PPoly(eqx.Module):
         self,
         c: jax.Array,
         x: jax.Array,
-        extrapolate: Union[None, bool, str] = None,
+        extrapolate: Union[None, bool, Literal["periodic"]] = None,
         axis: int = 0,
         check: bool = True,
     ) -> None:
@@ -188,7 +188,10 @@ class PPoly(eqx.Module):
 
     @partial(jit, static_argnames=("nu", "extrapolate"))
     def __call__(
-        self, x: jax.Array, nu: int = 0, extrapolate: Union[None, bool, str] = None
+        self,
+        x: jax.Array,
+        nu: int = 0,
+        extrapolate: Union[None, bool, Literal["periodic"]] = None,
     ) -> jax.Array:
         """Evaluate the piecewise polynomial or its derivative.
 
@@ -551,7 +554,7 @@ class CubicHermiteSpline(PPoly):
         y: jax.Array,
         dydx: jax.Array,
         axis: int = 0,
-        extrapolate: Union[None, bool, str] = None,
+        extrapolate: Union[None, bool, Literal["periodic"]] = None,
         check: bool = True,
     ) -> None:
         if extrapolate is None:
@@ -652,7 +655,7 @@ class PchipInterpolator(CubicHermiteSpline):
         x: jax.Array,
         y: jax.Array,
         axis: int = 0,
-        extrapolate: Union[None, bool, str] = None,
+        extrapolate: Union[None, bool, Literal["periodic"]] = None,
         check: bool = True,
     ) -> None:
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -710,7 +713,7 @@ class Akima1DInterpolator(CubicHermiteSpline):
         x: jax.Array,
         y: jax.Array,
         axis: int = 0,
-        extrapolate: Union[None, bool, str] = None,
+        extrapolate: Union[None, bool, Literal["periodic"]] = None,
         check: bool = True,
     ) -> None:
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -809,7 +812,7 @@ class CubicSpline(CubicHermiteSpline):
         y: jax.Array,
         axis: int = 0,
         bc_type: Union[str, tuple] = "not-a-knot",
-        extrapolate: Union[None, bool, str] = None,
+        extrapolate: Union[None, bool, Literal["periodic"]] = None,
         check: bool = True,
     ) -> None:
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)

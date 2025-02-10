@@ -1,5 +1,6 @@
 from typing import Literal, Optional, Union
 
+import equinox as eqx
 from jax import Array
 
 def approx_df(
@@ -15,21 +16,21 @@ def approx_df(
         "monotonic",
         "monotonic-0",
         "akima",
-    ] = "cubic",
-    axis: int = -1,
+    ] = ...,
+    axis: int = ...,
     **kwargs,
 ) -> Array: ...
 def fft_interp1d(
-    f: Array, n: int, sx: Optional[Array] = None, dx: float = ...
+    f: Array, n: int, sx: Optional[Array] = ..., dx: float = ...
 ) -> Array: ...
 def fft_interp2d(
     f: Array,
     n1: int,
     n2: int,
-    sx: Optional[Array] = None,
-    sy: Optional[Array] = None,
-    dx: float = 1.0,
-    dy: float = 1.0,
+    sx: Optional[Array] = ...,
+    sy: Optional[Array] = ...,
+    dx: float = ...,
+    dy: float = ...,
 ) -> Array: ...
 def interp1d(
     xq: Array,
@@ -45,12 +46,12 @@ def interp1d(
         "akima",
         "monotonic",
         "monotonic-0",
-    ] = "cubic",
-    derivative: int = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Optional[float] = None,
-    fx: Optional[Array] = None,
-    axis: int = 0,
+    ] = ...,
+    derivative: int = ...,
+    extrap: Union[bool, float, tuple] = ...,
+    period: Optional[float] = ...,
+    fx: Optional[Array] = ...,
+    axis: int = ...,
 ) -> Array: ...
 def interp2d(
     xq: Array,
@@ -68,13 +69,13 @@ def interp2d(
         "akima",
         "monotonic",
         "monotonic-0",
-    ] = "cubic",
-    derivative: int = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float, tuple] = None,
-    fx: Optional[Array] = None,
-    fy: Optional[Array] = None,
-    fxy: Optional[Array] = None,
+    ] = ...,
+    derivative: int = ...,
+    extrap: Union[bool, float, tuple] = ...,
+    period: Union[None, float, tuple] = ...,
+    fx: Optional[Array] = ...,
+    fy: Optional[Array] = ...,
+    fxy: Optional[Array] = ...,
 ) -> Array: ...
 def interp3d(
     xq: Array,
@@ -94,20 +95,20 @@ def interp3d(
         "akima",
         "monotonic",
         "monotonic-0",
-    ] = "cubic",
-    derivative: int = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float, tuple] = None,
-    fx: Optional[Array] = None,
-    fy: Optional[Array] = None,
-    fz: Optional[Array] = None,
-    fxy: Optional[Array] = None,
-    fxz: Optional[Array] = None,
-    fyz: Optional[Array] = None,
-    fxyz: Optional[Array] = None,
+    ] = ...,
+    derivative: int = ...,
+    extrap: Union[bool, float, tuple] = ...,
+    period: Union[None, float, tuple] = ...,
+    fx: Optional[Array] = ...,
+    fy: Optional[Array] = ...,
+    fz: Optional[Array] = ...,
+    fxy: Optional[Array] = ...,
+    fxz: Optional[Array] = ...,
+    fyz: Optional[Array] = ...,
+    fxyz: Optional[Array] = ...,
 ) -> Array: ...
 
-class Interpolator1D:
+class Interpolator1D(eqx.Module):
     x: Array
     f: Array
     derivs: dict
@@ -130,15 +131,15 @@ class Interpolator1D:
             "akima",
             "monotonic",
             "monotonic-0",
-        ] = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Optional[float] = None,
-        fx: Optional[Array] = None,
-        axis: int = 0,
+        ] = ...,
+        extrap: Union[bool, float, tuple] = ...,
+        period: Optional[float] = ...,
+        fx: Optional[Array] = ...,
+        axis: int = ...,
     ): ...
     def __call__(self, xq: Array, dx: int = 0): ...
 
-class Interpolator2D:
+class Interpolator2D(eqx.Module):
     x: Array
     y: Array
     f: Array
@@ -163,17 +164,17 @@ class Interpolator2D:
             "akima",
             "monotonic",
             "monotonic-0",
-        ] = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float, tuple] = None,
-        axis: int = 0,
-        fx: Optional[Array] = None,
-        fy: Optional[Array] = None,
-        fxy: Optional[Array] = None,
+        ] = ...,
+        extrap: Union[bool, float, tuple] = ...,
+        period: Union[None, float, tuple] = ...,
+        axis: int = ...,
+        fx: Optional[Array] = ...,
+        fy: Optional[Array] = ...,
+        fxy: Optional[Array] = ...,
     ) -> None: ...
     def __call__(self, xq: Array, yq: Array, dx: int = 0, dy: int = 0): ...
 
-class Interpolator3D:
+class Interpolator3D(eqx.Module):
     x: Array
     y: Array
     z: Array
@@ -200,24 +201,113 @@ class Interpolator3D:
             "akima",
             "monotonic",
             "monotonic-0",
-        ] = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float, tuple] = None,
-        fx: Optional[Array] = None,
-        fy: Optional[Array] = None,
-        fz: Optional[Array] = None,
-        fxy: Optional[Array] = None,
-        fxz: Optional[Array] = None,
-        fyz: Optional[Array] = None,
-        fxyz: Optional[Array] = None,
-        axis: int = 0,
+        ] = ...,
+        extrap: Union[bool, float, tuple] = ...,
+        period: Union[None, float, tuple] = ...,
+        fx: Optional[Array] = ...,
+        fy: Optional[Array] = ...,
+        fz: Optional[Array] = ...,
+        fxy: Optional[Array] = ...,
+        fxz: Optional[Array] = ...,
+        fyz: Optional[Array] = ...,
+        fxyz: Optional[Array] = ...,
+        axis: int = ...,
     ) -> None: ...
     def __call__(
         self,
         xq: Array,
         yq: Array,
         zq: Array,
-        dx: int = 0,
-        dy: int = 0,
-        dz: int = 0,
+        dx: int = ...,
+        dy: int = ...,
+        dz: int = ...,
     ): ...
+
+class PPoly(eqx.Module):
+    def __init__(
+        self,
+        c: Array,
+        x: Array,
+        extrapolate: Union[None, bool, str] = ...,
+        axis: int = ...,
+        check: bool = ...,
+    ) -> None: ...
+    @property
+    def c(self) -> Array: ...
+    @property
+    def x(self) -> Array: ...
+    @property
+    def extrapolate(self) -> Union[bool, str]: ...
+    @property
+    def axis(self) -> int: ...
+    @classmethod
+    def construct_fast(
+        cls,
+        c: Array,
+        x: Array,
+        extrapolate: Union[None, bool, Literal["periodic"]] = ...,
+        axis: int = ...,
+    ) -> "PPoly": ...
+    def __call__(
+        self,
+        x: Array,
+        nu: int = ...,
+        extrapolate: Union[None, bool, Literal["periodic"]] = ...,
+    ) -> Array: ...
+    def derivative(self, nu: int = ...) -> "PPoly": ...
+    def antiderivative(self, nu: int = ...) -> "PPoly": ...
+    def integrate(
+        self,
+        a: float,
+        b: float,
+        extrapolate: Union[None, bool, Literal["periodic"]] = ...,
+    ) -> Array: ...
+    def solve(self, y=..., discontinuity=..., extrapolate=...): ...
+    def roots(self, discontinuity=..., extrapolate=...): ...
+    def extend(self, c, x, right=...): ...
+    @classmethod
+    def from_spline(cls, tck, extrapolate=...): ...
+    @classmethod
+    def from_bernstein_basis(cls, bp, extrapolate=...): ...
+
+class CubicHermiteSpline(PPoly):
+    def __init__(
+        self,
+        x: Array,
+        y: Array,
+        dydx: Array,
+        axis: int = ...,
+        extrapolate: Union[None, bool, Literal["periodic"]] = ...,
+        check: bool = ...,
+    ) -> None: ...
+
+class PchipInterpolator(CubicHermiteSpline):
+    def __init__(
+        self,
+        x: Array,
+        y: Array,
+        axis: int = ...,
+        extrapolate: Union[None, bool, Literal["periodic"]] = ...,
+        check: bool = ...,
+    ) -> None: ...
+
+class Akima1DInterpolator(CubicHermiteSpline):
+    def __init__(
+        self,
+        x: Array,
+        y: Array,
+        axis: int = ...,
+        extrapolate: Union[None, bool, Literal["periodic"]] = ...,
+        check: bool = ...,
+    ) -> None: ...
+
+class CubicSpline(CubicHermiteSpline):
+    def __init__(
+        self,
+        x: Array,
+        y: Array,
+        axis: int = ...,
+        bc_type: Union[str, tuple] = ...,
+        extrapolate: Union[None, bool, Literal["periodic"]] = ...,
+        check: bool = ...,
+    ) -> None: ...
