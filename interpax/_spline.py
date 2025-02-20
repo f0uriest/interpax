@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 from functools import partial
-from typing import Union
+from typing import Optional, Union
 
 import equinox as eqx
 import jax
@@ -70,7 +70,7 @@ class Interpolator1D(eqx.Module):
     derivs: dict
     method: str
     extrap: Union[bool, float, tuple]
-    period: Union[None, float]
+    period: Optional[float]
     axis: int
 
     def __init__(
@@ -79,9 +79,9 @@ class Interpolator1D(eqx.Module):
         f: jax.Array,
         method: str = "cubic",
         extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float] = None,
+        period: Optional[float] = None,
         **kwargs,
-    ):
+    ) -> None:
         x, f = map(asarray_inexact, (x, f))
         axis = kwargs.get("axis", 0)
         fx = kwargs.pop("fx", None)
@@ -105,7 +105,7 @@ class Interpolator1D(eqx.Module):
 
         self.derivs = {"fx": fx}
 
-    def __call__(self, xq: jax.Array, dx: int = 0):
+    def __call__(self, xq: jax.Array, dx: int = 0) -> jax.Array:
         """Evaluate the interpolated function or its derivatives.
 
         Parameters
@@ -189,7 +189,7 @@ class Interpolator2D(eqx.Module):
         extrap: Union[bool, float, tuple] = False,
         period: Union[None, float, tuple] = None,
         **kwargs,
-    ):
+    ) -> None:
         x, y, f = map(asarray_inexact, (x, y, f))
         axis = kwargs.get("axis", 0)
         fx = kwargs.pop("fx", None)
@@ -225,7 +225,13 @@ class Interpolator2D(eqx.Module):
 
         self.derivs = {"fx": fx, "fy": fy, "fxy": fxy}
 
-    def __call__(self, xq: jax.Array, yq: jax.Array, dx: int = 0, dy: int = 0):
+    def __call__(
+        self,
+        xq: jax.Array,
+        yq: jax.Array,
+        dx: int = 0,
+        dy: int = 0,
+    ) -> jax.Array:
         """Evaluate the interpolated function or its derivatives.
 
         Parameters
@@ -315,7 +321,7 @@ class Interpolator3D(eqx.Module):
         extrap: Union[bool, float, tuple] = False,
         period: Union[None, float, tuple] = None,
         **kwargs,
-    ):
+    ) -> None:
         x, y, z, f = map(asarray_inexact, (x, y, z, f))
         axis = kwargs.get("axis", 0)
 
@@ -386,7 +392,7 @@ class Interpolator3D(eqx.Module):
         dx: int = 0,
         dy: int = 0,
         dz: int = 0,
-    ):
+    ) -> jax.Array:
         """Evaluate the interpolated function or its derivatives.
 
         Parameters
@@ -425,9 +431,9 @@ def interp1d(
     method: str = "cubic",
     derivative: int = 0,
     extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float] = None,
+    period: Optional[float] = None,
     **kwargs,
-):
+) -> jax.Array:
     """Interpolate a 1d function.
 
     Parameters
@@ -538,7 +544,6 @@ def interp1d(
         fq = jax.lax.switch(derivative, [derivative0, derivative1, derivative2])
 
     elif method in CUBIC_METHODS:
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
             fx = approx_df(x, f, method, axis, **kwargs)
@@ -575,7 +580,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     extrap: Union[bool, float, tuple] = False,
     period: Union[None, float, tuple] = None,
     **kwargs,
-):
+) -> jax.Array:
     """Interpolate a 2d function.
 
     Parameters
@@ -693,7 +698,6 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
 
@@ -786,7 +790,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     extrap: Union[bool, float, tuple] = False,
     period: Union[None, float, tuple] = None,
     **kwargs,
-):
+) -> jax.Array:
     """Interpolate a 3d function.
 
     Parameters
@@ -943,7 +947,6 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
         k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
@@ -1069,7 +1072,9 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
 
 @partial(jit, static_argnames=("axis"))
-def _make_periodic(xq: jax.Array, x: jax.Array, period: float, axis: int, *arrs):
+def _make_periodic(
+    xq: jax.Array, x: jax.Array, period: float, axis: int, *arrs: Optional[jax.Array]
+) -> jax.Array:
     """Make arrays periodic along a specified axis."""
     period = abs(period)
     xq = xq % period
@@ -1093,7 +1098,7 @@ def _make_periodic(xq: jax.Array, x: jax.Array, period: float, axis: int, *arrs)
 
 
 @jit
-def _get_t_der(t: jax.Array, derivative: int, dxi: jax.Array):
+def _get_t_der(t: jax.Array, derivative: int, dxi: jax.Array) -> jax.Array:
     """Get arrays of [1,t,t^2,t^3] for cubic interpolation."""
     t0 = jnp.zeros_like(t)
     t1 = jnp.ones_like(t)
@@ -1118,7 +1123,7 @@ def _parse_ndarg(arg, n):
     return arg
 
 
-def _parse_extrap(extrap, n):
+def _parse_extrap(extrap, n: int):
     if isbool(extrap):  # same for lower,upper in all dimensions
         return tuple(extrap for _ in range(2 * n))
     elif jnp.isscalar(extrap):
@@ -1141,22 +1146,22 @@ def _extrap(
     x: jax.Array,
     lo: Union[bool, float],
     hi: Union[bool, float],
-):
+) -> jax.Array:
     """Clamp or extrapolate values outside bounds."""
 
-    def loclip(fq, lo):
+    def loclip(fq: jax.Array, lo: jax.Array) -> jax.Array:
         # lo is either False (no extrapolation) or a fixed value to fill in
         if isbool(lo):
             lo = jnp.nan
         return jnp.where(xq < x[0], lo, fq.T).T
 
-    def hiclip(fq, hi):
+    def hiclip(fq: jax.Array, hi: jax.Array) -> jax.Array:
         # hi is either False (no extrapolation) or a fixed value to fill in
         if isbool(hi):
             hi = jnp.nan
         return jnp.where(xq > x[-1], hi, fq.T).T
 
-    def noclip(fq, *_):
+    def noclip(fq: jax.Array, *_) -> jax.Array:
         return fq
 
     # if extrap = True, don't clip. If it's false or numeric, clip to that value

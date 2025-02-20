@@ -49,7 +49,14 @@ def approx_df(
     return jit(fun)(x, f)
 
 
-def _approx_df(x, f, method, axis, c=0, bc_type="not-a-knot"):
+def _approx_df(
+    x: jax.Array,
+    f: jax.Array,
+    method: str,
+    axis: int,
+    c: float = 0,
+    bc_type="not-a-knot",
+):
     if method == "cubic":
         out = _cubic1(x, f, axis)
     elif method == "cubic2":
@@ -71,7 +78,7 @@ def _approx_df(x, f, method, axis, c=0, bc_type="not-a-knot"):
     return out
 
 
-def _cubic1(x, f, axis):
+def _cubic1(x: jax.Array, f: jax.Array, axis: int) -> jax.Array:
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=axis)
     dxi = jnp.where(dx == 0, 0, 1 / dx)
@@ -95,7 +102,9 @@ def _cubic1(x, f, axis):
     return fx
 
 
-def _validate_bc(bc_type, expected_deriv_shape, dtype):
+def _validate_bc(
+    bc_type, expected_deriv_shape: tuple[int, ...], dtype: jnp.dtype
+) -> tuple[list, jnp.dtype]:
     if isinstance(bc_type, str):
         errorif(bc_type == "periodic", NotImplementedError)
         bc_type = (bc_type, bc_type)
@@ -151,7 +160,7 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
     return validated_bc, dtype
 
 
-def _cubic2(x, f, axis, bc_type):
+def _cubic2(x: jax.Array, f: jax.Array, axis: int, bc_type) -> jax.Array:
     f = jnp.moveaxis(f, axis, 0)
     bc, dtype = _validate_bc(bc_type, f.shape[1:], f.dtype)
     dx = jnp.diff(x)
@@ -196,7 +205,6 @@ def _cubic2(x, f, axis, bc_type):
         fx = jnp.moveaxis(fx, 0, axis)
 
     else:
-
         # Find derivative values at each x[i] by solving a tridiagonal
         # system.
         diag = jnp.zeros(n, dtype=x.dtype)
@@ -250,7 +258,7 @@ def _cubic2(x, f, axis, bc_type):
     return fx
 
 
-def _cardinal(x, f, axis, c=0):
+def _cardinal(x: jax.Array, f: jax.Array, axis: int, c: float = 0) -> jax.Array:
     dx = x[2:] - x[:-2]
     df = jnp.take(f, jnp.arange(2, f.shape[axis]), axis, mode="wrap") - jnp.take(
         f, jnp.arange(0, f.shape[axis] - 2), axis, mode="wrap"
@@ -273,7 +281,7 @@ def _cardinal(x, f, axis, c=0):
     return fx
 
 
-def _monotonic(x, f, axis, zero_slope):
+def _monotonic(x: jax.Array, f: jax.Array, axis: int, zero_slope: bool) -> jax.Array:
     f = jnp.moveaxis(f, axis, 0)
     fshp = f.shape
     if f.ndim == 1:
@@ -331,7 +339,7 @@ def _monotonic(x, f, axis, zero_slope):
     return jnp.moveaxis(dk, 0, axis)
 
 
-def _akima(x, f, axis):
+def _akima(x: jax.Array, f: jax.Array, axis: int) -> jax.Array:
     # Original implementation in MATLAB by N. Shamsundar (BSD licensed), see
     # https://www.mathworks.com/matlabcentral/fileexchange/1814-akima-interpolation
     dx = jnp.diff(x)
