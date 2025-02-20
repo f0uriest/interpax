@@ -42,7 +42,7 @@ Functional interface for 1D, 2D, 3D interpolation
 
     interpax.interp1d
     interpax.interp2d
-    interpax.interp2d
+    interpax.interp3d
 
 
 Fourier interpolation of periodic functions in 1D and 2D
