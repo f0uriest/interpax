@@ -1,2 +1,5 @@
 include versioneer.py
 include interpax/_version.py
+include requirements.txt
+include requirements-dev.txt
+include LICENSE
