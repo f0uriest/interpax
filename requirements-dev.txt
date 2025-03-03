@@ -4,7 +4,7 @@
 scipy >= 1.10.0, <= 1.15.2
 
 # building the docs
-sphinx >= 3.0.0, <= 8.2.0
+sphinx >= 3.0.0, <= 8.2.1
 sphinx_copybutton <= 0.5.2
 sphinx-rtd-theme >= 1.0, < 3.0.3
 sphinx-github-style >= 1.0, <= 1.2.2
@@ -18,7 +18,7 @@ flake8-isort >= 5.0.0, <= 6.1.2
 pre-commit <= 4.1.0
 
 # testing and benchmarking
-pytest >= 5.0.0, <= 8.3.4
+pytest >= 5.0.0, <= 8.3.5
 pytest-benchmark <= 5.1.0
 pytest-cov >= 2.6.0, <= 6.0.0
 pytest-monitor <= 1.6.6
