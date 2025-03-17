@@ -68,7 +68,7 @@ class Interpolator1D(eqx.Module):
     x: jax.Array
     f: jax.Array
     derivs: dict
-    method: str
+    method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
     period: Union[None, float]
     axis: int
@@ -175,7 +175,7 @@ class Interpolator2D(eqx.Module):
     y: jax.Array
     f: jax.Array
     derivs: dict
-    method: str
+    method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
     period: Union[None, float, tuple]
     axis: int
@@ -300,7 +300,7 @@ class Interpolator3D(eqx.Module):
     z: jax.Array
     f: jax.Array
     derivs: dict
-    method: str
+    method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
     period: Union[None, float, tuple]
     axis: int
