@@ -11,6 +11,7 @@ from ._ppoly import (
     PPoly,
 )
 from ._spline import (
+    AbstractInterpolator,
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
