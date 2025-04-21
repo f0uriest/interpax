@@ -385,9 +385,7 @@ class PPoly(eqx.Module):
 
             def falsefun():
                 return (
-                    jnp.zeros(self.c.shape[2:])
-                    if self.c.shape[2:]
-                    else jnp.array([0.0])
+                    jnp.zeros(self.c.shape[2:]) if self.c.shape[2:] else jnp.array(0.0)
                 )
 
             out = jax.lax.cond(n_periods > 0, truefun, falsefun)
