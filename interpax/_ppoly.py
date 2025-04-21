@@ -242,8 +242,9 @@ class PPoly(eqx.Module):
         y = y.reshape(x_shape + self.c.shape[2:])
 
         if not extrapolate:
-            mask = jnp.logical_or(x > self.x[-1], x < self.x[0])
-            y = jnp.where(mask, jnp.nan, y.T).T
+            # x became 1d after flatten, so reshape this back to original x shape
+            mask = jnp.logical_or(x > self.x[-1], x < self.x[0]).reshape(x_shape)
+            y = jnp.where(mask.T, jnp.nan, y.T).T
 
         if self.axis != 0:
             # transpose to move the calculated values to the interpolation axis
