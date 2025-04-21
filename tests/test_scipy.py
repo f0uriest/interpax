@@ -540,6 +540,7 @@ class TestPPoly:
         # 1 - x**2
         c = np.array([[-1, 0, 1]]).T
         x = np.array([0, 1])
+        x1 = 1 / 2
 
         for extrapolate in [True, False, None]:
             pp = PPoly(c, x, extrapolate=extrapolate)
@@ -554,6 +555,11 @@ class TestPPoly:
                 assert_allclose(pp([-0.1, 1.1]), [1 - 0.1**2, 1 - 1.1**2])
                 assert_(not np.isnan(pp_i([-0.1, 1.1])).any())
                 assert_(not np.isnan(pp_d([-0.1, 1.1])).any())
+
+            # extra test for gh#85
+            assert pp(x1).shape == ()
+            assert pp_d(x1).shape == ()
+            assert pp_i(x1).shape == ()
 
 
 def _ppoly_eval_1(c, x, xps):
