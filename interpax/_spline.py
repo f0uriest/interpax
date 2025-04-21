@@ -29,7 +29,23 @@ METHODS_2D = CUBIC_METHODS + OTHER_METHODS
 METHODS_3D = CUBIC_METHODS + OTHER_METHODS
 
 
-class Interpolator1D(eqx.Module):
+class AbstractInterpolator(eqx.Module):
+    """ABC convenience class for representing an interpolated function.
+
+    Subclasses should implement the `__call__` method to evaluate the
+    interpolated function.
+
+    """
+
+    f: eqx.AbstractVar[jax.Array]  # function values to interpolate
+    derivs: eqx.AbstractVar[dict[str, jax.Array]]
+    method: str = eqx.field(static=True)
+    extrap: eqx.AbstractVar[Union[bool, float, tuple]]
+    period: eqx.AbstractVar[Union[None, float, tuple]]
+    axis: eqx.AbstractVar[int]
+
+
+class Interpolator1D(AbstractInterpolator):
     """Convenience class for representing a 1D interpolated function.
 
     Parameters
@@ -68,7 +84,7 @@ class Interpolator1D(eqx.Module):
     x: jax.Array
     f: jax.Array
     derivs: dict
-    method: str
+    method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
     period: Union[None, float]
     axis: int
@@ -132,7 +148,7 @@ class Interpolator1D(eqx.Module):
         )
 
 
-class Interpolator2D(eqx.Module):
+class Interpolator2D(AbstractInterpolator):
     """Convenience class for representing a 2D interpolated function.
 
     Parameters
@@ -175,7 +191,7 @@ class Interpolator2D(eqx.Module):
     y: jax.Array
     f: jax.Array
     derivs: dict
-    method: str
+    method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
     period: Union[None, float, tuple]
     axis: int
@@ -254,7 +270,7 @@ class Interpolator2D(eqx.Module):
         )
 
 
-class Interpolator3D(eqx.Module):
+class Interpolator3D(AbstractInterpolator):
     """Convenience class for representing a 3D interpolated function.
 
     Parameters
@@ -300,7 +316,7 @@ class Interpolator3D(eqx.Module):
     z: jax.Array
     f: jax.Array
     derivs: dict
-    method: str
+    method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
     period: Union[None, float, tuple]
     axis: int

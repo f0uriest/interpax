@@ -286,9 +286,7 @@ class TestInterp3D:
         zp = np.linspace(0, 3, 25)
         xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
 
-        f = lambda x, y, z: np.array(
-            [np.sin(x) * np.cos(y) * z**2, 0.1 * (x + y - z)]
-        )
+        f = lambda x, y, z: np.array([np.sin(x) * np.cos(y) * z**2, 0.1 * (x + y - z)])
         fp = f(xxp.T, yyp.T, zzp.T).T
 
         fq = interp3d(x, y, z, xp, yp, zp, fp, method="nearest")
