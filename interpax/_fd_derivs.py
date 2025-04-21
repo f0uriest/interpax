@@ -243,6 +243,20 @@ def _cubic2(x, f, axis, bc_type):
             lower_diag = lower_diag.at[-1].set(dx[-1])
             b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
 
+        # this is needed to avoid singular matrix when there are duplicate x coords
+        mask = diag == 0
+        diag = jnp.where(mask, 1, diag)
+        lower_diag = jnp.where(mask[1:], 0, lower_diag)
+        upper_diag = jnp.where(mask[:-1], 0, upper_diag)
+        b = jnp.where(mask, 0, b.T).T
+
+        # see https://github.com/patrick-kidger/lineax/issues/148
+        dtype = jnp.result_type(diag, lower_diag, upper_diag, b)
+        diag = diag.astype(dtype)
+        lower_diag = lower_diag.astype(dtype)
+        upper_diag = upper_diag.astype(dtype)
+        b = b.astype(dtype)
+
         A = lx.TridiagonalLinearOperator(diag, lower_diag, upper_diag)
 
         solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal()).value
