@@ -1,7 +1,7 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
-from jax import jit
 
 from .utils import asarray_inexact, errorif
 
@@ -41,22 +41,14 @@ def approx_df(
         First derivative of f with respect to x.
 
     """
-    # noqa: D202
-
-    # close over static args to deal with non-jittable kwargs
-    def fun(x, f):
-        return _approx_df(x, f, method, axis, **kwargs)
-
-    return jit(fun)(x, f)
-
-
-def _approx_df(x, f, method, axis, c=0, bc_type="not-a-knot"):
     if method == "cubic":
         out = _cubic1(x, f, axis)
     elif method == "cubic2":
-        out = _cubic2(x, f, axis, bc_type=bc_type)
+        bc_type = kwargs.get("bc_type", "not-a-knot")
+        bc, dtype = _validate_bc(bc_type, f.shape[:axis] + f.shape[axis + 1 :], f.dtype)
+        out = _cubic2(x, f, axis, bc=bc, dtype=dtype)
     elif method == "cardinal":
-        out = _cardinal(x, f, axis, c=c)
+        out = _cardinal(x, f, axis, c=kwargs.get("c", 0))
     elif method == "catmull-rom":
         out = _cardinal(x, f, axis, c=0)
     elif method == "monotonic":
@@ -72,6 +64,7 @@ def _approx_df(x, f, method, axis, c=0, bc_type="not-a-knot"):
     return out
 
 
+@eqx.filter_jit
 def _cubic1(x, f, axis):
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=axis)
@@ -152,9 +145,9 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
     return validated_bc, dtype
 
 
-def _cubic2(x, f, axis, bc_type):
+@eqx.filter_jit
+def _cubic2(x, f, axis, bc, dtype):
     f = jnp.moveaxis(f, axis, 0)
-    bc, dtype = _validate_bc(bc_type, f.shape[1:], f.dtype)
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=0)
     dxr = dx.reshape([dx.shape[0]] + [1] * (f.ndim - 1))
@@ -218,14 +211,29 @@ def _cubic2(x, f, axis, bc_type):
             b = b.at[0].set(
                 ((dxr[0] + 2 * d) * dxr[1] * df[0] + dxr[0] ** 2 * df[1]) / d
             )
-        elif bc_start[0] == 1:
-            diag = diag.at[0].set(1)
-            upper_diag = upper_diag.at[0].set(0)
-            b = b.at[0].set(bc_start[1])
-        elif bc_start[0] == 2:
-            diag = diag.at[0].set(2 * dx[0])
-            upper_diag = upper_diag.at[0].set(dx[0])
-            b = b.at[0].set(-0.5 * bc_start[1] * dx[0] ** 2 + 3 * (f[1] - f[0]))
+        else:
+
+            def bc0(diag, upper_diag, b):
+                return diag, upper_diag, b
+
+            def bc1(diag, upper_diag, b):
+                diag = diag.at[0].set(1)
+                upper_diag = upper_diag.at[0].set(0)
+                b = b.at[0].set(bc_start[1])
+                return diag, upper_diag, b
+
+            def bc2(diag, upper_diag, b):
+                diag = diag.at[0].set(2 * dx[0])
+                upper_diag = upper_diag.at[0].set(dx[0])
+                b = b.at[0].set(-0.5 * bc_start[1] * dx[0] ** 2 + 3 * (f[1] - f[0]))
+                return diag, upper_diag, b
+
+            diag, upper_diag, b = jax.lax.cond(
+                bc_start[0] == 1, bc1, bc0, diag, upper_diag, b
+            )
+            diag, upper_diag, b = jax.lax.cond(
+                bc_start[0] == 2, bc2, bc0, diag, upper_diag, b
+            )
 
         if bc_end == "not-a-knot":
             d = x[-1] - x[-3]
@@ -234,14 +242,29 @@ def _cubic2(x, f, axis, bc_type):
             b = b.at[-1].set(
                 (dxr[-1] ** 2 * df[-2] + (2 * d + dxr[-1]) * dxr[-2] * df[-1]) / d
             )
-        elif bc_end[0] == 1:
-            diag = diag.at[-1].set(1)
-            lower_diag = lower_diag.at[-1].set(0)
-            b = b.at[-1].set(bc_end[1])
-        elif bc_end[0] == 2:
-            diag = diag.at[-1].set(2 * dx[-1])
-            lower_diag = lower_diag.at[-1].set(dx[-1])
-            b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
+        else:
+
+            def bc0(diag, lower_diag, b):
+                return diag, lower_diag, b
+
+            def bc1(diag, lower_diag, b):
+                diag = diag.at[-1].set(1)
+                lower_diag = lower_diag.at[-1].set(0)
+                b = b.at[-1].set(bc_end[1])
+                return diag, lower_diag, b
+
+            def bc2(diag, lower_diag, b):
+                diag = diag.at[-1].set(2 * dx[-1])
+                lower_diag = lower_diag.at[-1].set(dx[-1])
+                b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
+                return diag, lower_diag, b
+
+            diag, lower_diag, b = jax.lax.cond(
+                bc_end[0] == 1, bc1, bc0, diag, lower_diag, b
+            )
+            diag, lower_diag, b = jax.lax.cond(
+                bc_end[0] == 2, bc2, bc0, diag, lower_diag, b
+            )
 
         # this is needed to avoid singular matrix when there are duplicate x coords
         mask = diag == 0
@@ -262,9 +285,10 @@ def _cubic2(x, f, axis, bc_type):
         solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal()).value
         fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
         fx = jnp.moveaxis(fx, 0, axis)
-    return fx
+    return fx.astype(f.dtype)
 
 
+@eqx.filter_jit
 def _cardinal(x, f, axis, c=0):
     dx = x[2:] - x[:-2]
     df = jnp.take(f, jnp.arange(2, f.shape[axis]), axis, mode="wrap") - jnp.take(
@@ -288,6 +312,7 @@ def _cardinal(x, f, axis, c=0):
     return fx
 
 
+@eqx.filter_jit
 def _monotonic(x, f, axis, zero_slope):
     f = jnp.moveaxis(f, axis, 0)
     fshp = f.shape
@@ -317,11 +342,12 @@ def _monotonic(x, f, axis, zero_slope):
 
     dk = jnp.where(condition, 0, 1.0 / whmean)
 
-    if zero_slope:
+    def slope_zero():
         d0 = jnp.zeros((1, dk.shape[1]))
         d1 = jnp.zeros((1, dk.shape[1]))
+        return d0, d1
 
-    else:
+    def slope_nonzero():
         # special case endpoints, as suggested in
         # Cleve Moler, Numerical Computing with MATLAB, Chap 3.6 (pchiptx.m)
         def _edge_case(h0, h1, m0, m1):
@@ -340,12 +366,16 @@ def _monotonic(x, f, axis, zero_slope):
         hk = 1 / hki
         d0 = _edge_case(hk[0, :], hk[1, :], mk[0, :], mk[1, :])[None]
         d1 = _edge_case(hk[-1, :], hk[-2, :], mk[-1, :], mk[-2, :])[None]
+        return d0, d1
+
+    d0, d1 = jax.lax.cond(zero_slope, slope_zero, slope_nonzero)
 
     dk = jnp.concatenate([d0, dk, d1])
     dk = dk.reshape(fshp)
     return jnp.moveaxis(dk, 0, axis)
 
 
+@eqx.filter_jit
 def _akima(x, f, axis):
     # Original implementation in MATLAB by N. Shamsundar (BSD licensed), see
     # https://www.mathworks.com/matlabcentral/fileexchange/1814-akima-interpolation
