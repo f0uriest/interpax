@@ -7,6 +7,7 @@ import pytest
 from jax import config as jax_config
 
 from interpax import (
+    CubicSpline,
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
@@ -546,3 +547,10 @@ def test_extrap_float():
     np.testing.assert_allclose(interpol(4.5, 5.3), 1.0)
     np.testing.assert_allclose(interpol(-4.5, 5.3), 0.0)
     np.testing.assert_allclose(interpol(4.5, -5.3), 0.0)
+
+
+@pytest.mark.unit
+def test_jittable_cubicspline():
+    x = jnp.linspace(0, 10, 10)
+    y = jnp.linspace(0, 8, 10)
+    res = jax.jit(CubicSpline)(x, y)

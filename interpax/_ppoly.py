@@ -136,8 +136,8 @@ class PPoly(eqx.Module):
         if check:
 
             dx = jnp.diff(x)
-            errorif(
-                jnp.any(dx < 0), ValueError, "`x` must be strictly increasing sequence."
+            dx = eqx.error_if(
+                dx, jnp.any(dx < 0), "`x` must be strictly increasing sequence."
             )
 
         self._extrapolate = extrapolate
@@ -472,24 +472,23 @@ def prepare_input(x, y, axis, dydx=None, check=True):
             ValueError,
             f"The length of `y` along `axis`={axis} doesn't match the length of `x`",
         )
-        errorif(
-            not jnp.all(jnp.isfinite(x)),
-            ValueError,
+        x = eqx.error_if(
+            x,
+            ~jnp.isfinite(x),
             "`x` must contain only finite values.",
         )
-        errorif(
-            not jnp.all(jnp.isfinite(y)),
-            ValueError,
+        f = eqx.error_if(
+            y,
+            ~jnp.isfinite(y),
             "`y` must contain only finite values.",
         )
-        errorif(
-            (dydx is not None) and (not jnp.all(jnp.isfinite(dydx))),
-            ValueError,
-            "`dydx` must contain only finite values.",
-        )
-        errorif(
-            jnp.any(dx <= 0), ValueError, "`x` must be strictly increasing sequence."
-        )
+        if dydx is not None:
+            dydx = eqx.error_if(
+                dydx,
+                ~jnp.isfinite(dydx),
+                "`dydx` must contain only finite values.",
+            )
+        dx = eqx.error_if(dx, dx <= 0, "`x` must be strictly increasing sequence.")
 
     return x, dx, y, axis, dydx
 
