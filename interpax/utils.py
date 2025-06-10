@@ -1,8 +1,10 @@
 """Util functions for interpax."""
 
+import functools
 import warnings
 
 import jax.numpy as jnp
+from jax import jit
 
 
 def isbool(x):
@@ -33,3 +35,18 @@ def asarray_inexact(x):
     if not jnp.issubdtype(dtype, jnp.inexact):
         dtype = jnp.result_type(x, jnp.array(1.0))
     return x.astype(dtype)
+
+
+def wrap_jit(*args, **kwargs):
+    """Wrap a function with jit with optional extra args.
+
+    This is a helper to ensure docstrings and type hints are correctly propagated
+    to the wrapped function, bc vscode seems to have issues with regular jitted funcs.
+    """
+
+    def wrapper(fun):
+        foo = jit(fun, *args, **kwargs)
+        foo = functools.wraps(fun)(foo)
+        return foo
+
+    return wrapper
