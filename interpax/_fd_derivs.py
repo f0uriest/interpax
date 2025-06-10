@@ -147,6 +147,7 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
 
 @eqx.filter_jit
 def _cubic2(x, f, axis, bc, dtype):
+    f = f.astype(dtype)
     f = jnp.moveaxis(f, axis, 0)
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=0)
