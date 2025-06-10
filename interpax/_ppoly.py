@@ -35,17 +35,15 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-from functools import partial
 from typing import Union
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jax import jit
 
 from ._coefs import A_CUBIC
 from ._fd_derivs import approx_df
-from .utils import asarray_inexact, errorif
+from .utils import asarray_inexact, errorif, wrap_jit
 
 
 class PPoly(eqx.Module):
@@ -187,7 +185,7 @@ class PPoly(eqx.Module):
         object.__setattr__(self, "_axis", axis)
         return self
 
-    @partial(jit, static_argnames=("nu", "extrapolate"))
+    @wrap_jit(static_argnames=("nu", "extrapolate"))
     def __call__(self, x: jax.Array, nu: int = 0, extrapolate: Union[bool, str] = None):
         """Evaluate the piecewise polynomial or its derivative.
 
