@@ -1,7 +1,6 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
 from collections import OrderedDict
-from functools import partial
 from typing import Union
 
 import equinox as eqx
@@ -12,7 +11,7 @@ from jax import jit
 
 from ._coefs import A_BICUBIC, A_CUBIC, A_TRICUBIC
 from ._fd_derivs import approx_df
-from .utils import asarray_inexact, errorif, isbool
+from .utils import asarray_inexact, errorif, isbool, wrap_jit
 
 CUBIC_METHODS = (
     "cubic",
@@ -433,7 +432,7 @@ class Interpolator3D(AbstractInterpolator):
         )
 
 
-@partial(jit, static_argnames="method")
+@wrap_jit(static_argnames=["method"])
 def interp1d(
     xq: jax.Array,
     x: jax.Array,
@@ -579,7 +578,7 @@ def interp1d(
     return fq.reshape(outshape)
 
 
-@partial(jit, static_argnames="method")
+@wrap_jit(static_argnames=["method"])
 def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq: jax.Array,
     yq: jax.Array,
@@ -788,7 +787,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     return fq.reshape(outshape)
 
 
-@partial(jit, static_argnames="method")
+@wrap_jit(static_argnames=["method"])
 def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq: jax.Array,
     yq: jax.Array,
@@ -1084,7 +1083,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     return fq.reshape(outshape)
 
 
-@partial(jit, static_argnames=("axis"))
+@wrap_jit(static_argnames=["axis"])
 def _make_periodic(xq: jax.Array, x: jax.Array, period: float, axis: int, *arrs):
     """Make arrays periodic along a specified axis."""
     period = abs(period)
