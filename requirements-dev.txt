@@ -18,7 +18,7 @@ flake8-isort >= 5.0.0, <= 6.1.2
 pre-commit <= 4.2.0
 
 # testing and benchmarking
-pytest >= 5.0.0, <= 8.3.5
+pytest >= 5.0.0, <= 8.4.0
 pytest-benchmark <= 5.1.0
 pytest-cov >= 2.6.0, <= 6.1.1
 pytest-monitor <= 1.6.6
