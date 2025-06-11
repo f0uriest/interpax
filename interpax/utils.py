@@ -2,17 +2,23 @@
 
 import functools
 import warnings
+from typing import Any, Type, Union
 
+import jax
 import jax.numpy as jnp
-from jax import jit
+from jaxtyping import Array, Inexact, Num
+
+from .types import Arrayish
 
 
-def isbool(x):
+def isbool(x: Any) -> bool:
     """Check if something is boolean or ndarray of bool type."""
     return isinstance(x, bool) or (hasattr(x, "dtype") and (x.dtype == bool))
 
 
-def errorif(cond, err=ValueError, msg=""):
+def errorif(
+    cond: Union[bool, jax.Array], err: Type[Exception] = ValueError, msg: str = ""
+):
     """Raise an error if condition is met.
 
     Similar to assert but allows wider range of Error types, rather than
@@ -22,13 +28,15 @@ def errorif(cond, err=ValueError, msg=""):
         raise err(msg)
 
 
-def warnif(cond, err=UserWarning, msg=""):
+def warnif(
+    cond: Union[bool, jax.Array], err: Type[Warning] = UserWarning, msg: str = ""
+):
     """Throw a warning if condition is met."""
     if cond:
         warnings.warn(msg, err)
 
 
-def asarray_inexact(x):
+def asarray_inexact(x: Num[Arrayish, "..."]) -> Inexact[Array, "..."]:
     """Convert to jax array with floating point dtype."""
     x = jnp.asarray(x)
     dtype = x.dtype
@@ -45,7 +53,7 @@ def wrap_jit(*args, **kwargs):
     """
 
     def wrapper(fun):
-        foo = jit(fun, *args, **kwargs)
+        foo = jax.jit(fun, *args, **kwargs)
         foo = functools.wraps(fun)(foo)
         return foo
 

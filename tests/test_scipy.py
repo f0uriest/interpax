@@ -231,6 +231,7 @@ class TestPPolyCommon:
         c = np.random.rand(3, 4, 5, 6, 7, 8)
         c_s = c.shape
         xp = np.random.random((1, 2))
+        x = np.empty(1)
         for axis in (0, 1, 2, 3):
             m = c.shape[axis + 1]
             x = np.sort(np.random.rand(m + 1))
@@ -270,7 +271,7 @@ class TestPolySubclassing:
         np.random.seed(1234)
         x = np.sort(np.random.random(3))
         c = np.random.random((4, 2))
-        return self.P(c, x), self.B(c, x)
+        return self.P(c, x), self.B(c, x)  # pyright: ignore
 
     def test_derivative(self):
         pp, bp = self._make_polynomials()
@@ -771,7 +772,9 @@ class TestCubicSpline:
             assert_allclose(S(x[0], 2), 0, rtol=tol, atol=tol)
         else:
             order, value = bc_start
-            assert_allclose(S(x[0], order), value, rtol=tol, atol=tol)
+            assert_allclose(
+                S(x[0], order), value, rtol=tol, atol=tol  # pyright: ignore
+            )
 
         if bc_end == "not-a-knot":
             if x.size == 2:
@@ -785,7 +788,9 @@ class TestCubicSpline:
             assert_allclose(S(x[-1], 2), 0, rtol=2 * tol, atol=2 * tol)
         else:
             order, value = bc_end
-            assert_allclose(S(x[-1], order), value, rtol=tol, atol=tol)
+            assert_allclose(
+                S(x[-1], order), value, rtol=tol, atol=tol  # pyright: ignore
+            )
 
     def check_all_bc(self, x, y, axis):
         deriv_shape = list(y.shape)
@@ -834,11 +839,11 @@ class TestCubicSpline:
         self.check_correctness(S)
 
         S = CubicSpline(x, x**3, bc_type=("natural", (1, 2j)))
-        self.check_correctness(S, "natural", (1, 2j))
+        self.check_correctness(S, "natural", (1, 2j))  # pyright: ignore
 
         y = np.array([-5, 2, 3, 1])
         S = CubicSpline(x, y, bc_type=[(1, 2 + 0.5j), (2, 0.5 - 1j)])
-        self.check_correctness(S, (1, 2 + 0.5j), (2, 0.5 - 1j))
+        self.check_correctness(S, (1, 2 + 0.5j), (2, 0.5 - 1j))  # pyright: ignore
 
     def test_incorrect_inputs(self):
         x = np.array([1, 2, 3, 4])
