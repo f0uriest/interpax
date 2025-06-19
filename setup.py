@@ -37,10 +37,10 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Natural Language :: English",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Topic :: Scientific/Engineering",
         "Topic :: Scientific/Engineering :: Mathematics",
     ],
@@ -48,7 +48,7 @@ setup(
     packages=find_packages(exclude=["docs", "tests", "local", "report"]),
     include_package_data=True,
     install_requires=requirements,
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     project_urls={
         "Issues Tracker": "https://github.com/f0uriest/interpax/issues",
         "Contributing": "https://github.com/f0uriest/interpax/blob/master/CONTRIBUTING.rst",  # noqa: E501
