@@ -40,11 +40,10 @@ from typing import Iterable, Optional, Union
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Inexact, Num, Real
+from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
 from ._coefs import A_CUBIC
 from ._fd_derivs import approx_df
-from .types import Arrayish
 from .utils import asarray_inexact, errorif, wrap_jit
 
 
@@ -88,8 +87,8 @@ class PPoly(eqx.Module):
 
     def __init__(
         self,
-        c: Num[Arrayish, "k m ..."],
-        x: Real[Arrayish, " m+1"],
+        c: Num[ArrayLike, "k m ..."],
+        x: Real[ArrayLike, " m+1"],
         extrapolate: Optional[Union[bool, str]] = None,
         axis: int = 0,
         check: bool = True,
@@ -134,7 +133,6 @@ class PPoly(eqx.Module):
         )
 
         if check:
-
             dx = jnp.diff(x)
             errorif(
                 jnp.any(dx < 0), ValueError, "`x` must be strictly increasing sequence."
@@ -168,8 +166,8 @@ class PPoly(eqx.Module):
     @classmethod
     def construct_fast(
         cls,
-        c: Inexact[Arrayish, "k m ..."],
-        x: Real[Arrayish, " m+1"],
+        c: Inexact[ArrayLike, "k m ..."],
+        x: Real[ArrayLike, " m+1"],
         extrapolate: Optional[Union[bool, str]] = None,
         axis: int = 0,
     ) -> "PPoly":
@@ -190,7 +188,7 @@ class PPoly(eqx.Module):
     @wrap_jit(static_argnames=("nu", "extrapolate"))
     def __call__(
         self,
-        x: Num[Arrayish, "..."],
+        x: Num[ArrayLike, "..."],
         nu: int = 0,
         extrapolate: Optional[Union[bool, str]] = None,
     ) -> Inexact[Array, "..."]:
@@ -541,9 +539,9 @@ class CubicHermiteSpline(PPoly):
 
     def __init__(
         self,
-        x: Real[Arrayish, " n"],
-        y: Num[Arrayish, " n ..."],
-        dydx: Num[Arrayish, " n ..."],
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
+        dydx: Num[ArrayLike, " n ..."],
         axis: int = 0,
         extrapolate: Optional[Union[bool, str]] = None,
         check: bool = True,
@@ -643,8 +641,8 @@ class PchipInterpolator(CubicHermiteSpline):
 
     def __init__(
         self,
-        x: Real[Arrayish, " n"],
-        y: Num[Arrayish, " n ..."],
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
         axis: int = 0,
         extrapolate: Optional[Union[bool, str]] = None,
         check: bool = True,
@@ -701,8 +699,8 @@ class Akima1DInterpolator(CubicHermiteSpline):
 
     def __init__(
         self,
-        x: Real[Arrayish, " n"],
-        y: Num[Arrayish, " n ..."],
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
         axis: int = 0,
         extrapolate: Optional[Union[bool, str]] = None,
         check: bool = True,
@@ -799,8 +797,8 @@ class CubicSpline(CubicHermiteSpline):
 
     def __init__(
         self,
-        x: Real[Arrayish, " n"],
-        y: Num[Arrayish, " n ..."],
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
         axis: int = 0,
         bc_type: Union[str, Iterable] = "not-a-knot",
         extrapolate: Optional[Union[bool, str]] = None,

@@ -131,7 +131,7 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
                 ) from e
 
             if deriv_order not in [1, 2]:
-                raise ValueError("The specified derivative order must " "be 1 or 2.")
+                raise ValueError("The specified derivative order must be 1 or 2.")
 
             deriv_value = asarray_inexact(deriv_value)
             dtype = jnp.promote_types(dtype, deriv_value.dtype)
@@ -191,7 +191,6 @@ def _cubic2(x, f, axis, bc, dtype):
         fx = jnp.moveaxis(fx, 0, axis)
 
     else:
-
         # Find derivative values at each x[i] by solving a tridiagonal
         # system.
         diag = jnp.zeros(n, dtype=x.dtype)

@@ -7,8 +7,11 @@ from typing import Any, Type, Union
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Inexact, Num
+from numpy.typing import ArrayLike
 
-from .types import Arrayish
+# jax.typing.ArrayLike and jaxtyping.ArrayLike don't include eg tuples,lists,iterables
+# like np.ArrayLike. This combines all the usual array types
+Arrayish = Union[Array, ArrayLike]
 
 
 def isbool(x: Any) -> bool:

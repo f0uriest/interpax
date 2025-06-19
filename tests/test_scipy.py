@@ -181,7 +181,7 @@ class TestPPolyCommon:
     def test_ctor_c(self):
         # wrong shape: `c` must be at least 2D
         with assert_raises(ValueError):
-            PPoly([1, 2], [0, 1])
+            PPoly(np.array([1, 2]), np.array([0, 1]))
 
     def test_extend(self):
         # Test adding new points to the piecewise polynomial
@@ -395,13 +395,17 @@ class TestPPoly:
 
     def test_antiderivative_of_constant(self):
         # https://github.com/scipy/scipy/issues/4216
-        p = PPoly([[1.0]], [0, 1])
-        assert_array_equal(p.antiderivative().c, PPoly([[1], [0]], [0, 1]).c)
-        assert_array_equal(p.antiderivative().x, PPoly([[1], [0]], [0, 1]).x)
+        p = PPoly(np.array([[1.0]]), np.array([0, 1]))
+        assert_array_equal(
+            p.antiderivative().c, PPoly(np.array([[1], [0]]), np.array([0, 1])).c
+        )
+        assert_array_equal(
+            p.antiderivative().x, PPoly(np.array([[1], [0]]), np.array([0, 1])).x
+        )
 
     def test_antiderivative_regression_4355(self):
         # https://github.com/scipy/scipy/issues/4355
-        p = PPoly([[1.0, 0.5]], [0, 1, 2])
+        p = PPoly(np.array([[1.0, 0.5]]), np.array([0, 1, 2]))
         q = p.antiderivative()
         assert_array_equal(q.c, [[1, 0.5], [0, 1]])
         assert_array_equal(q.x, [0, 1, 2])
@@ -549,13 +553,13 @@ class TestPPoly:
             pp_i = pp.antiderivative()
 
             if extrapolate is False:
-                assert_(np.isnan(pp([-0.1, 1.1])).all())
-                assert_(np.isnan(pp_i([-0.1, 1.1])).all())
-                assert_(np.isnan(pp_d([-0.1, 1.1])).all())
+                assert_(np.isnan(pp(np.array([-0.1, 1.1]))).all())
+                assert_(np.isnan(pp_i(np.array([-0.1, 1.1]))).all())
+                assert_(np.isnan(pp_d(np.array([-0.1, 1.1]))).all())
             else:
-                assert_allclose(pp([-0.1, 1.1]), [1 - 0.1**2, 1 - 1.1**2])
-                assert_(not np.isnan(pp_i([-0.1, 1.1])).any())
-                assert_(not np.isnan(pp_d([-0.1, 1.1])).any())
+                assert_allclose(pp(np.array([-0.1, 1.1])), [1 - 0.1**2, 1 - 1.1**2])
+                assert_(not np.isnan(pp_i(np.array([-0.1, 1.1]))).any())
+                assert_(not np.isnan(pp_d(np.array([-0.1, 1.1]))).any())
 
             # extra test for gh#85
             assert pp(x1).shape == ()
@@ -709,16 +713,22 @@ class TestPCHIP:
         # while there are only two points available.
         # Instead, it should construct a linear interpolator.
         x = np.linspace(0, 1, 11)
-        p = PchipInterpolator([0, 1], [0, 2])
+        p = PchipInterpolator(np.array([0, 1]), np.array([0, 2]))
         assert_allclose(p(x), 2 * x, atol=1e-15)
 
     def test_PchipInterpolator(self):
         assert_array_almost_equal(
-            PchipInterpolator([1, 2, 3], [4, 5, 6])([0.5], nu=1), [1.0]
+            PchipInterpolator(np.array([1, 2, 3]), np.array([4, 5, 6]))(
+                np.array([0.5]), nu=1
+            ),
+            [1.0],
         )
 
         assert_array_almost_equal(
-            PchipInterpolator([1, 2, 3], [4, 5, 6])([0.5], nu=0), [3.5]
+            PchipInterpolator(np.array([1, 2, 3]), np.array([4, 5, 6]))(
+                np.array([0.5]), nu=0
+            ),
+            [3.5],
         )
 
 
@@ -886,18 +896,18 @@ class TestCubicSpline:
 
 
 def test_CubicHermiteSpline_correctness():
-    x = [0, 2, 7]
-    y = [-1, 2, 3]
-    dydx = [0, 3, 7]
+    x = np.array([0, 2, 7])
+    y = np.array([-1, 2, 3])
+    dydx = np.array([0, 3, 7])
     s = CubicHermiteSpline(x, y, dydx)
     assert_allclose(s(x), y, rtol=1e-15)
     assert_allclose(s(x, 1), dydx, rtol=1e-15)
 
 
 def test_CubicHermiteSpline_error_handling():
-    x = [1, 2, 3]
-    y = [0, 3, 5]
-    dydx = [1, -1, 2, 3]
+    x = np.array([1, 2, 3])
+    y = np.array([0, 3, 5])
+    dydx = np.array([1, -1, 2, 3])
     assert_raises(ValueError, CubicHermiteSpline, x, y, dydx)
 
     dydx_with_nan = [1, 0, np.nan]

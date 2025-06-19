@@ -2,17 +2,16 @@ from typing import Optional
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Inexact, Num
+from jaxtyping import Array, ArrayLike, Inexact, Num
 
-from .types import Arrayish
 from .utils import asarray_inexact, wrap_jit
 
 
 @wrap_jit(static_argnames=["n"])
 def fft_interp1d(
-    f: Num[Arrayish, "nx ..."],
+    f: Num[ArrayLike, "nx ..."],
     n: int,
-    sx: Optional[Num[Arrayish, " s"]] = None,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
     dx: float = 1.0,
 ) -> Inexact[Array, "n ... s"]:
     """Interpolation of a 1d periodic function via FFT.
@@ -50,11 +49,11 @@ def fft_interp1d(
 
 @wrap_jit(static_argnames=["n1", "n2"])
 def fft_interp2d(
-    f: Num[Arrayish, "nx ny ..."],
+    f: Num[ArrayLike, "nx ny ..."],
     n1: int,
     n2: int,
-    sx: Optional[Num[Arrayish, " s"]] = None,
-    sy: Optional[Num[Arrayish, " s"]] = None,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
+    sy: Optional[Num[ArrayLike, " s"]] = None,
     dx: float = 1.0,
     dy: float = 1.0,
 ) -> Inexact[Array, "n1 n2 ... s"]:
