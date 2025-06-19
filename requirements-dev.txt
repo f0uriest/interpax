@@ -16,6 +16,7 @@ flake8-docstrings >= 1.0.0, <= 1.7.0
 flake8-eradicate >= 1.0.0, <= 1.5.0
 flake8-isort >= 5.0.0, <= 6.1.2
 pre-commit <= 4.2.0
+pyright < 1.2
 
 # testing and benchmarking
 pytest >= 5.0.0, <= 8.4.0
