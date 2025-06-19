@@ -27,3 +27,8 @@ repos:
     rev: v3.19.0
     hooks:
       - id: pyupgrade
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.402
+    hooks:
+    - id: pyright
+      additional_dependencies: ["jax", "equinox", "pytest"]
