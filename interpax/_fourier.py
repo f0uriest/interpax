@@ -1,11 +1,19 @@
+from typing import Optional
+
 import jax
 import jax.numpy as jnp
+from jaxtyping import Array, ArrayLike, Inexact, Num
 
-from .utils import wrap_jit
+from .utils import asarray_inexact, wrap_jit
 
 
 @wrap_jit(static_argnames=["n"])
-def fft_interp1d(f: jax.Array, n: int, sx: jax.Array = None, dx: float = 1.0):
+def fft_interp1d(
+    f: Num[ArrayLike, "nx ..."],
+    n: int,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
+    dx: float = 1.0,
+) -> Inexact[Array, "n ... s"]:
     """Interpolation of a 1d periodic function via FFT.
 
     Parameters
@@ -24,9 +32,11 @@ def fft_interp1d(f: jax.Array, n: int, sx: jax.Array = None, dx: float = 1.0):
     fi : ndarray, shape(n, ..., len(sx))
         Interpolated (and possibly shifted) data points
     """
+    f = asarray_inexact(f)
     c = jnp.fft.ifft(f, axis=0)
     nx = c.shape[0]
     if sx is not None:
+        sx = asarray_inexact(sx)
         sx = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(nx)[:, None] * sx / dx)
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
@@ -39,14 +49,14 @@ def fft_interp1d(f: jax.Array, n: int, sx: jax.Array = None, dx: float = 1.0):
 
 @wrap_jit(static_argnames=["n1", "n2"])
 def fft_interp2d(
-    f: jax.Array,
+    f: Num[ArrayLike, "nx ny ..."],
     n1: int,
     n2: int,
-    sx: jax.Array = None,
-    sy: jax.Array = None,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
+    sy: Optional[Num[ArrayLike, " s"]] = None,
     dx: float = 1.0,
     dy: float = 1.0,
-):
+) -> Inexact[Array, "n1 n2 ... s"]:
     """Interpolation of a 2d periodic function via FFT.
 
     Parameters
@@ -66,9 +76,12 @@ def fft_interp2d(
     fi : ndarray, shape(n1, n2, ..., len(sx))
         Interpolated (and possibly shifted) data points
     """
+    f = asarray_inexact(f)
     c = jnp.fft.ifft2(f, axes=(0, 1))
     nx, ny = c.shape[:2]
     if (sx is not None) and (sy is not None):
+        sx = asarray_inexact(sx)
+        sy = asarray_inexact(sy)
         sx = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(nx)[:, None] * sx / dx)
         sy = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(ny)[:, None] * sy / dy)
         c = (c[None].T * sx[None, :, :] * sy[:, None, :]).T

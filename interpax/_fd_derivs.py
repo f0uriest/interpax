@@ -131,7 +131,7 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
                 ) from e
 
             if deriv_order not in [1, 2]:
-                raise ValueError("The specified derivative order must " "be 1 or 2.")
+                raise ValueError("The specified derivative order must be 1 or 2.")
 
             deriv_value = asarray_inexact(deriv_value)
             dtype = jnp.promote_types(dtype, deriv_value.dtype)
@@ -191,7 +191,6 @@ def _cubic2(x, f, axis, bc, dtype):
         fx = jnp.moveaxis(fx, 0, axis)
 
     else:
-
         # Find derivative values at each x[i] by solving a tridiagonal
         # system.
         diag = jnp.zeros(n, dtype=x.dtype)
@@ -214,26 +213,26 @@ def _cubic2(x, f, axis, bc, dtype):
             )
         else:
 
-            def bc0(diag, upper_diag, b):
+            def bc_start0(diag, upper_diag, b):
                 return diag, upper_diag, b
 
-            def bc1(diag, upper_diag, b):
+            def bc_start1(diag, upper_diag, b):
                 diag = diag.at[0].set(1)
                 upper_diag = upper_diag.at[0].set(0)
                 b = b.at[0].set(bc_start[1])
                 return diag, upper_diag, b
 
-            def bc2(diag, upper_diag, b):
+            def bc_start2(diag, upper_diag, b):
                 diag = diag.at[0].set(2 * dx[0])
                 upper_diag = upper_diag.at[0].set(dx[0])
                 b = b.at[0].set(-0.5 * bc_start[1] * dx[0] ** 2 + 3 * (f[1] - f[0]))
                 return diag, upper_diag, b
 
             diag, upper_diag, b = jax.lax.cond(
-                bc_start[0] == 1, bc1, bc0, diag, upper_diag, b
+                bc_start[0] == 1, bc_start1, bc_start0, diag, upper_diag, b
             )
             diag, upper_diag, b = jax.lax.cond(
-                bc_start[0] == 2, bc2, bc0, diag, upper_diag, b
+                bc_start[0] == 2, bc_start2, bc_start0, diag, upper_diag, b
             )
 
         if bc_end == "not-a-knot":
@@ -245,26 +244,26 @@ def _cubic2(x, f, axis, bc, dtype):
             )
         else:
 
-            def bc0(diag, lower_diag, b):
+            def bc_end0(diag, lower_diag, b):
                 return diag, lower_diag, b
 
-            def bc1(diag, lower_diag, b):
+            def bc_end1(diag, lower_diag, b):
                 diag = diag.at[-1].set(1)
                 lower_diag = lower_diag.at[-1].set(0)
                 b = b.at[-1].set(bc_end[1])
                 return diag, lower_diag, b
 
-            def bc2(diag, lower_diag, b):
+            def bc_end2(diag, lower_diag, b):
                 diag = diag.at[-1].set(2 * dx[-1])
                 lower_diag = lower_diag.at[-1].set(dx[-1])
                 b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
                 return diag, lower_diag, b
 
             diag, lower_diag, b = jax.lax.cond(
-                bc_end[0] == 1, bc1, bc0, diag, lower_diag, b
+                bc_end[0] == 1, bc_end1, bc_end0, diag, lower_diag, b
             )
             diag, lower_diag, b = jax.lax.cond(
-                bc_end[0] == 2, bc2, bc0, diag, lower_diag, b
+                bc_end[0] == 2, bc_end2, bc_end0, diag, lower_diag, b
             )
 
         # this is needed to avoid singular matrix when there are duplicate x coords
@@ -290,7 +289,7 @@ def _cubic2(x, f, axis, bc, dtype):
 
 
 @eqx.filter_jit
-def _cardinal(x, f, axis, c=0):
+def _cardinal(x: jax.Array, f: jax.Array, axis: int, c: float = 0.0):
     dx = x[2:] - x[:-2]
     df = jnp.take(f, jnp.arange(2, f.shape[axis]), axis, mode="wrap") - jnp.take(
         f, jnp.arange(0, f.shape[axis] - 2), axis, mode="wrap"
@@ -314,7 +313,7 @@ def _cardinal(x, f, axis, c=0):
 
 
 @eqx.filter_jit
-def _monotonic(x, f, axis, zero_slope):
+def _monotonic(x: jax.Array, f: jax.Array, axis: int, zero_slope: bool):
     f = jnp.moveaxis(f, axis, 0)
     fshp = f.shape
     if f.ndim == 1:
@@ -351,7 +350,7 @@ def _monotonic(x, f, axis, zero_slope):
     def slope_nonzero():
         # special case endpoints, as suggested in
         # Cleve Moler, Numerical Computing with MATLAB, Chap 3.6 (pchiptx.m)
-        def _edge_case(h0, h1, m0, m1):
+        def _edge_case(h0: jax.Array, h1: jax.Array, m0: jax.Array, m1: jax.Array):
             # one-sided three-point estimate for the derivative
             d = ((2 * h0 + h1) * m0 - h0 * m1) / (h0 + h1)
 

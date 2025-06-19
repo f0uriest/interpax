@@ -43,6 +43,7 @@ setup(
         "Programming Language :: Python :: 3.13",
         "Topic :: Scientific/Engineering",
         "Topic :: Scientific/Engineering :: Mathematics",
+        "Typing :: Typed",
     ],
     keywords="interpolation spline cubic fourier approximation",
     packages=find_packages(exclude=["docs", "tests", "local", "report"]),

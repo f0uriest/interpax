@@ -35,11 +35,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-from typing import Union
+from typing import Iterable, Optional, Union
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
 from ._coefs import A_CUBIC
 from ._fd_derivs import approx_df
@@ -79,19 +80,19 @@ class PPoly(eqx.Module):
     larger than 20-30.
     """
 
-    _c: jax.Array
-    _x: jax.Array
+    _c: Inexact[Array, "k m ..."]
+    _x: Float[Array, " m+1"]
     _extrapolate: Union[bool, str] = eqx.field(static=True)
     _axis: int = eqx.field(static=True)
 
     def __init__(
         self,
-        c: jax.Array,
-        x: jax.Array,
-        extrapolate: Union[bool, str] = None,
+        c: Num[ArrayLike, "k m ..."],
+        x: Real[ArrayLike, " m+1"],
+        extrapolate: Optional[Union[bool, str]] = None,
         axis: int = 0,
         check: bool = True,
-    ):
+    ) -> None:
         c = asarray_inexact(c)
         x = asarray_inexact(x)
 
@@ -132,7 +133,6 @@ class PPoly(eqx.Module):
         )
 
         if check:
-
             dx = jnp.diff(x)
             errorif(
                 jnp.any(dx < 0), ValueError, "`x` must be strictly increasing sequence."
@@ -144,12 +144,12 @@ class PPoly(eqx.Module):
         self._c = c
 
     @property
-    def c(self) -> jax.Array:
+    def c(self) -> Inexact[Array, "k m ..."]:
         """Array of spline coefficients, shape(order, knots-1, ...)."""
         return self._c
 
     @property
-    def x(self) -> jax.Array:
+    def x(self) -> Float[Array, " m+1"]:
         """Array of knot values, shape(knots)."""
         return self._x
 
@@ -166,11 +166,11 @@ class PPoly(eqx.Module):
     @classmethod
     def construct_fast(
         cls,
-        c: jax.Array,
-        x: jax.Array,
-        extrapolate: Union[bool, str] = None,
+        c: Inexact[ArrayLike, "k m ..."],
+        x: Real[ArrayLike, " m+1"],
+        extrapolate: Optional[Union[bool, str]] = None,
         axis: int = 0,
-    ):
+    ) -> "PPoly":
         """Construct the piecewise polynomial without making checks.
 
         Takes the same parameters as the constructor. Input arguments
@@ -186,7 +186,12 @@ class PPoly(eqx.Module):
         return self
 
     @wrap_jit(static_argnames=("nu", "extrapolate"))
-    def __call__(self, x: jax.Array, nu: int = 0, extrapolate: Union[bool, str] = None):
+    def __call__(
+        self,
+        x: Num[ArrayLike, "..."],
+        nu: int = 0,
+        extrapolate: Optional[Union[bool, str]] = None,
+    ) -> Inexact[Array, "..."]:
         """Evaluate the piecewise polynomial or its derivative.
 
         Parameters
@@ -235,14 +240,14 @@ class PPoly(eqx.Module):
         c = self.c[:, i - 1]
 
         c = jnp.vectorize(lambda x: jnp.polyder(x, nu), signature="(n)->(m)")(c.T).T
-        y = jnp.vectorize(jnp.polyval, signature="(n),()->()")(c.T, t).T
+        y: jax.Array = jnp.vectorize(jnp.polyval, signature="(n),()->()")(c.T, t).T
 
         y = y.reshape(x_shape + self.c.shape[2:])
 
         if not extrapolate:
             # x became 1d after flatten, so reshape this back to original x shape
             mask = jnp.logical_or(x > self.x[-1], x < self.x[0]).reshape(x_shape)
-            y = jnp.where(mask.T, jnp.nan, y.T).T
+            y = jnp.where(mask.T, jnp.array(jnp.nan), y.T).T
 
         if self.axis != 0:
             # transpose to move the calculated values to the interpolation axis
@@ -251,7 +256,7 @@ class PPoly(eqx.Module):
             y = y.transpose(l)
         return y
 
-    def derivative(self, nu: int = 1):
+    def derivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the derivative.
 
         Parameters
@@ -290,7 +295,7 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, self.extrapolate, self.axis)
 
-    def antiderivative(self, nu: int = 1):
+    def antiderivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the antiderivative.
 
         Antiderivative is also the indefinite integral of the function,
@@ -340,7 +345,9 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, extrapolate, self.axis)
 
-    def integrate(self, a: float, b: float, extrapolate: Union[bool, str] = None):
+    def integrate(
+        self, a: Real, b: Real, extrapolate: Optional[Union[bool, str]] = None
+    ) -> Inexact[Array, ""]:
         """Compute a definite integral over a piecewise polynomial.
 
         Parameters
@@ -378,15 +385,15 @@ class PPoly(eqx.Module):
             interval = b - a
             n_periods, left = jnp.divmod(interval, period)
 
-            def truefun():
+            def truefun1():
                 return (integral(xe) - integral(xs)) * n_periods
 
-            def falsefun():
+            def falsefun1():
                 return (
                     jnp.zeros(self.c.shape[2:]) if self.c.shape[2:] else jnp.array(0.0)
                 )
 
-            out = jax.lax.cond(n_periods > 0, truefun, falsefun)
+            out = jax.lax.cond(n_periods > 0, truefun1, falsefun1)
 
             # Map a to [xs, xe], b is always a + left.
             a = xs + (a - xs) % period
@@ -395,15 +402,15 @@ class PPoly(eqx.Module):
             # If b <= xe then we need to integrate over [a, b], otherwise
             # over [a, xe] and from xs to what is remained.
 
-            def truefun(out):
+            def truefun2(out):
                 return out + (integral(b) - integral(a))
 
-            def falsefun(out):
+            def falsefun2(out):
                 out += integral(xe) - integral(a)
                 out += integral(xs + left + a - xe) - integral(xs)
                 return out
 
-            out = jax.lax.cond(b <= xe, truefun, falsefun, out)
+            out = jax.lax.cond(b <= xe, truefun2, falsefun2, out)
         else:
             out = integral(b, extrapolate=extrapolate) - integral(
                 a, extrapolate=extrapolate
@@ -532,13 +539,13 @@ class CubicHermiteSpline(PPoly):
 
     def __init__(
         self,
-        x: jax.Array,
-        y: jax.Array,
-        dydx: jax.Array,
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
+        dydx: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Optional[Union[bool, str]] = None,
         check: bool = True,
-    ):
+    ) -> None:
         if extrapolate is None:
             extrapolate = True
 
@@ -634,10 +641,10 @@ class PchipInterpolator(CubicHermiteSpline):
 
     def __init__(
         self,
-        x: jax.Array,
-        y: jax.Array,
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Optional[Union[bool, str]] = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -692,10 +699,10 @@ class Akima1DInterpolator(CubicHermiteSpline):
 
     def __init__(
         self,
-        x: jax.Array,
-        y: jax.Array,
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        extrapolate: Union[bool, str] = None,
+        extrapolate: Optional[Union[bool, str]] = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -790,11 +797,11 @@ class CubicSpline(CubicHermiteSpline):
 
     def __init__(
         self,
-        x: jax.Array,
-        y: jax.Array,
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        bc_type: Union[str, tuple] = "not-a-knot",
-        extrapolate: Union[bool, str] = None,
+        bc_type: Union[str, Iterable] = "not-a-knot",
+        extrapolate: Optional[Union[bool, str]] = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)

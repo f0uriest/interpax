@@ -1,13 +1,14 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
 from collections import OrderedDict
-from typing import Union
+from typing import Any, Union
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import jit
+from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
 from ._coefs import A_BICUBIC, A_CUBIC, A_TRICUBIC
 from ._fd_derivs import approx_df
@@ -36,8 +37,8 @@ class AbstractInterpolator(eqx.Module):
 
     """
 
-    f: eqx.AbstractVar[jax.Array]  # function values to interpolate
-    derivs: eqx.AbstractVar[dict[str, jax.Array]]
+    f: eqx.AbstractVar[Inexact[Array, "..."]]  # function values to interpolate
+    derivs: eqx.AbstractVar[dict[str, Inexact[Array, "..."]]]
     method: str = eqx.field(static=True)
     extrap: eqx.AbstractVar[Union[bool, float, tuple]]
     period: eqx.AbstractVar[Union[None, float, tuple]]
@@ -80,8 +81,8 @@ class Interpolator1D(AbstractInterpolator):
 
     """
 
-    x: jax.Array
-    f: jax.Array
+    x: Float[Array, " Nx"]
+    f: Inexact[Array, " Nx ..."]
     derivs: dict
     method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
@@ -90,13 +91,13 @@ class Interpolator1D(AbstractInterpolator):
 
     def __init__(
         self,
-        x: jax.Array,
-        f: jax.Array,
+        x: Real[ArrayLike, " Nx"],
+        f: Num[ArrayLike, " Nx ..."],
         method: str = "cubic",
         extrap: Union[bool, float, tuple] = False,
         period: Union[None, float] = None,
         **kwargs,
-    ):
+    ) -> None:
         x, f = map(asarray_inexact, (x, f))
         axis = kwargs.get("axis", 0)
         fx = kwargs.pop("fx", None)
@@ -113,14 +114,16 @@ class Interpolator1D(AbstractInterpolator):
         self.axis = axis
         self.method = method
         self.extrap = extrap
-        self.period = period
+        self.period = period  # pyright: ignore
 
         if fx is None:
             fx = approx_df(x, f, method, axis, **kwargs)
 
         self.derivs = {"fx": fx}
 
-    def __call__(self, xq: jax.Array, dx: int = 0):
+    def __call__(
+        self, xq: Real[ArrayLike, "..."], dx: int = 0
+    ) -> Inexact[Array, "..."]:
         """Evaluate the interpolated function or its derivatives.
 
         Parameters
@@ -186,9 +189,9 @@ class Interpolator2D(AbstractInterpolator):
 
     """
 
-    x: jax.Array
-    y: jax.Array
-    f: jax.Array
+    x: Float[Array, " Nx"]
+    y: Float[Array, " Ny"]
+    f: Inexact[Array, " Nx Ny ..."]
     derivs: dict
     method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
@@ -197,9 +200,9 @@ class Interpolator2D(AbstractInterpolator):
 
     def __init__(
         self,
-        x: jax.Array,
-        y: jax.Array,
-        f: jax.Array,
+        x: Real[ArrayLike, " Nx"],
+        y: Real[ArrayLike, " Ny"],
+        f: Num[ArrayLike, " Nx Ny ..."],
         method: str = "cubic",
         extrap: Union[bool, float, tuple] = False,
         period: Union[None, float, tuple] = None,
@@ -240,7 +243,13 @@ class Interpolator2D(AbstractInterpolator):
 
         self.derivs = {"fx": fx, "fy": fy, "fxy": fxy}
 
-    def __call__(self, xq: jax.Array, yq: jax.Array, dx: int = 0, dy: int = 0):
+    def __call__(
+        self,
+        xq: Real[ArrayLike, "..."],
+        yq: Real[ArrayLike, "..."],
+        dx: int = 0,
+        dy: int = 0,
+    ) -> Inexact[Array, "..."]:
         """Evaluate the interpolated function or its derivatives.
 
         Parameters
@@ -310,10 +319,10 @@ class Interpolator3D(AbstractInterpolator):
 
     """
 
-    x: jax.Array
-    y: jax.Array
-    z: jax.Array
-    f: jax.Array
+    x: Float[Array, " Nx"]
+    y: Float[Array, " Ny"]
+    z: Float[Array, " Nz"]
+    f: Inexact[Array, " Nx Ny Nz ..."]
     derivs: dict
     method: str = eqx.field(static=True)
     extrap: Union[bool, float, tuple]
@@ -322,10 +331,10 @@ class Interpolator3D(AbstractInterpolator):
 
     def __init__(
         self,
-        x: jax.Array,
-        y: jax.Array,
-        z: jax.Array,
-        f: jax.Array,
+        x: Real[ArrayLike, " Nx"],
+        y: Real[ArrayLike, " Ny"],
+        z: Real[ArrayLike, " Nz"],
+        f: Num[ArrayLike, " Nx Ny Nz ..."],
         method: str = "cubic",
         extrap: Union[bool, float, tuple] = False,
         period: Union[None, float, tuple] = None,
@@ -395,13 +404,13 @@ class Interpolator3D(AbstractInterpolator):
 
     def __call__(
         self,
-        xq: jax.Array,
-        yq: jax.Array,
-        zq: jax.Array,
+        xq: Real[ArrayLike, "..."],
+        yq: Real[ArrayLike, "..."],
+        zq: Real[ArrayLike, "..."],
         dx: int = 0,
         dy: int = 0,
         dz: int = 0,
-    ):
+    ) -> Inexact[Array, "..."]:
         """Evaluate the interpolated function or its derivatives.
 
         Parameters
@@ -434,15 +443,15 @@ class Interpolator3D(AbstractInterpolator):
 
 @wrap_jit(static_argnames=["method"])
 def interp1d(
-    xq: jax.Array,
-    x: jax.Array,
-    f: jax.Array,
+    xq: Real[ArrayLike, " Nq"],
+    x: Real[ArrayLike, " Nx"],
+    f: Num[ArrayLike, "Nx ..."],
     method: str = "cubic",
     derivative: int = 0,
     extrap: Union[bool, float, tuple] = False,
     period: Union[None, float] = None,
     **kwargs,
-):
+) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 1d function.
 
     Parameters
@@ -516,18 +525,18 @@ def interp1d(
 
     if method == "nearest":
 
-        def derivative0():
+        def derivative0_nearest():
             i = jnp.argmin(jnp.abs(xq[:, np.newaxis] - x[np.newaxis]), axis=1)
             return f[i]
 
-        def derivative1():
+        def derivative1_nearest():
             return jnp.zeros((xq.size, *f.shape[1:]))
 
-        fq = jax.lax.switch(derivative, [derivative0, derivative1])
+        fq = jax.lax.switch(derivative, [derivative0_nearest, derivative1_nearest])
 
     elif method == "linear":
 
-        def derivative0():
+        def derivative0_linear():
             i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
             df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
             dx = x[i] - x[i - 1]
@@ -540,20 +549,22 @@ def interp1d(
             ).T
             return fq
 
-        def derivative1():
+        def derivative1_linear():
             i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
             df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
             dx = x[i] - x[i - 1]
             dxi = jnp.where(dx == 0, 0, 1 / dx)
             return (df.T * dxi).T
 
-        def derivative2():
+        def derivative2_linear():
             return jnp.zeros((xq.size, *f.shape[1:]))
 
-        fq = jax.lax.switch(derivative, [derivative0, derivative1, derivative2])
+        fq = jax.lax.switch(
+            derivative, [derivative0_linear, derivative1_linear, derivative2_linear]
+        )
 
-    elif method in CUBIC_METHODS:
-
+    else:
+        assert method in CUBIC_METHODS
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         if fx is None:
             fx = approx_df(x, f, method, axis, **kwargs)
@@ -580,17 +591,17 @@ def interp1d(
 
 @wrap_jit(static_argnames=["method"])
 def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
-    xq: jax.Array,
-    yq: jax.Array,
-    x: jax.Array,
-    y: jax.Array,
-    f: jax.Array,
+    xq: Real[ArrayLike, " Nq"],
+    yq: Real[ArrayLike, " Nq"],
+    x: Real[ArrayLike, " Nx"],
+    y: Real[ArrayLike, " Ny"],
+    f: Num[ArrayLike, "Nx Ny ..."],
     method: str = "cubic",
-    derivative: int = 0,
+    derivative: Union[int, tuple] = 0,
     extrap: Union[bool, float, tuple] = False,
     period: Union[None, float, tuple] = None,
     **kwargs,
-):
+) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 2d function.
 
     Parameters
@@ -708,7 +719,6 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
 
@@ -737,7 +747,8 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         F = jnp.array([[f00, f01], [f10, f11]])
         fq = (dxi * dyi * jnp.einsum("ijk...,ik,jk->k...", F, tx, ty).T).T
 
-    elif method in CUBIC_METHODS:
+    else:
+        assert method in CUBIC_METHODS
         if fx is None:
             fx = approx_df(x, f, method, 0, **kwargs)
         if fy is None:
@@ -789,19 +800,19 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
 @wrap_jit(static_argnames=["method"])
 def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
-    xq: jax.Array,
-    yq: jax.Array,
-    zq: jax.Array,
-    x: jax.Array,
-    y: jax.Array,
-    z: jax.Array,
-    f: jax.Array,
+    xq: Real[ArrayLike, " Nq"],
+    yq: Real[ArrayLike, " Nq"],
+    zq: Real[ArrayLike, " Nq"],
+    x: Real[ArrayLike, " Nx"],
+    y: Real[ArrayLike, " Ny"],
+    z: Real[ArrayLike, " Nz"],
+    f: Num[ArrayLike, "Nx Ny Nz ..."],
     method: str = "cubic",
-    derivative: int = 0,
+    derivative: Union[int, tuple] = 0,
     extrap: Union[bool, float, tuple] = False,
     period: Union[None, float, tuple] = None,
     **kwargs,
-):
+) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 3d function.
 
     Parameters
@@ -958,7 +969,6 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
         k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
@@ -1001,7 +1011,8 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         F = jnp.array([[[f000, f001], [f010, f011]], [[f100, f101], [f110, f111]]])
         fq = (dxi * dyi * dzi * jnp.einsum("lijk...,lk,ik,jk->k...", F, tx, ty, tz).T).T
 
-    elif method in CUBIC_METHODS:
+    else:
+        assert method in CUBIC_METHODS
         if fx is None:
             fx = approx_df(x, f, method, 0, **kwargs)
         if fy is None:
@@ -1084,7 +1095,13 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
 
 @wrap_jit(static_argnames=["axis"])
-def _make_periodic(xq: jax.Array, x: jax.Array, period: float, axis: int, *arrs):
+def _make_periodic(
+    xq: jax.Array,
+    x: jax.Array,
+    period: float,
+    axis: int,
+    *arrs: jax.Array,
+) -> tuple[jax.Array, ...]:
     """Make arrays periodic along a specified axis."""
     period = abs(period)
     xq = xq % period
@@ -1092,19 +1109,19 @@ def _make_periodic(xq: jax.Array, x: jax.Array, period: float, axis: int, *arrs)
     i = jnp.argsort(x)
     x = x[i]
     x = jnp.concatenate([x[-1:] - period, x, x[:1] + period])
-    arrs = list(arrs)
-    for k in range(len(arrs)):
-        if arrs[k] is not None:
-            arrs[k] = jnp.take(arrs[k], i, axis, mode="wrap")
-            arrs[k] = jnp.concatenate(
+    arrlist = list(arrs)
+    for k in range(len(arrlist)):
+        if arrlist[k] is not None:
+            arrlist[k] = jnp.take(arrlist[k], i, axis, mode="wrap")
+            arrlist[k] = jnp.concatenate(
                 [
-                    jnp.take(arrs[k], jnp.array([-1]), axis),
-                    arrs[k],
-                    jnp.take(arrs[k], jnp.array([0]), axis),
+                    jnp.take(arrlist[k], jnp.array([-1]), axis),
+                    arrlist[k],
+                    jnp.take(arrlist[k], jnp.array([0]), axis),
                 ],
                 axis=axis,
             )
-    return (xq, x, *arrs)
+    return (xq, x, *arrlist)
 
 
 @jit
@@ -1123,7 +1140,7 @@ def _get_t_der(t: jax.Array, derivative: int, dxi: jax.Array):
     return jax.lax.switch(derivative, [d0, d1, d2, d3, d4])
 
 
-def _parse_ndarg(arg, n):
+def _parse_ndarg(arg: Any, n: int) -> Union[Any, tuple]:
     try:
         k = len(arg)
     except TypeError:
@@ -1159,13 +1176,13 @@ def _extrap(
 ):
     """Clamp or extrapolate values outside bounds."""
 
-    def loclip(fq, lo):
+    def loclip(fq: jax.Array, lo: Union[bool, float]):
         # lo is either False (no extrapolation) or a fixed value to fill in
         if isbool(lo):
             lo = jnp.nan
         return jnp.where(xq < x[0], lo, fq.T).T
 
-    def hiclip(fq, hi):
+    def hiclip(fq: jax.Array, hi: Union[bool, float]):
         # hi is either False (no extrapolation) or a fixed value to fill in
         if isbool(hi):
             hi = jnp.nan
