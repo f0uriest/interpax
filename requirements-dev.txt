@@ -1,7 +1,7 @@
 # standard install requirements
 -r ./requirements.txt
 
-scipy >= 1.10.0, <= 1.15.2
+scipy >= 1.10.0, <= 1.15.3
 
 # building the docs
 sphinx >= 3.0.0, <= 8.2.3
