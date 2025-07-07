@@ -10,6 +10,7 @@ from ._ppoly import (
     PchipInterpolator,
     PPoly,
 )
+from ._rbf import RBFInterpolator
 from ._spline import (
     AbstractInterpolator,
     Interpolator1D,
