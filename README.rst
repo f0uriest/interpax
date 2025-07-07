@@ -14,7 +14,6 @@ in 1d, 2d, and 3d, as well as Fourier interpolation for periodic functions in
 
 Coming soon:
 - Spline interpolation for rectilinear grids in N-dimensions
-- RBF interpolation for unstructured data in N-dimensions
 - Smoothing splines for noisy data
 
 
