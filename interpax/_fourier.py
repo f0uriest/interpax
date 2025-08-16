@@ -98,17 +98,18 @@ def fft_interp2d(
 
 def _pad_along_axis(array: jax.Array, pad: tuple = (0, 0), axis: int = 0):
     """Pad with zeros or truncate a given dimension."""
-    array = jnp.moveaxis(array, axis, 0)
+    index = [slice(None)] * array.ndim
+    start = stop = None
 
     if pad[0] < 0:
-        array = array[abs(pad[0]) :]
+        start = abs(pad[0])
         pad = (0, pad[1])
     if pad[1] < 0:
-        array = array[: -abs(pad[1])]
+        stop = -abs(pad[1])
         pad = (pad[0], 0)
 
-    npad = [(0, 0)] * array.ndim
-    npad[0] = pad
+    index[axis] = slice(start, stop)
+    pad_width = [(0, 0)] * array.ndim
+    pad_width[axis] = pad
 
-    array = jnp.pad(array, pad_width=npad, mode="constant", constant_values=0)
-    return jnp.moveaxis(array, 0, axis)
+    return jnp.pad(array[tuple(index)], pad_width)
