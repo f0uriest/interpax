@@ -33,14 +33,16 @@ def fft_interp1d(
         Interpolated (and possibly shifted) data points
     """
     f = asarray_inexact(f)
-    c = jnp.fft.rfft(f, axis=0, norm="forward")
     nx = f.shape[0]
+    c = jnp.fft.rfft(f, axis=0, norm="forward")
+
     if sx is not None:
         tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
         sx = jnp.exp(1j * jnp.fft.rfftfreq(nx, dx / tau)[:, None] * sx)
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
+
     return jnp.fft.irfft(c, n, axis=0, norm="forward")
 
 
@@ -75,7 +77,10 @@ def fft_interp2d(
     """
     f = asarray_inexact(f)
     c = jnp.fft.rfft2(f, axes=(0, 1), norm="forward")
-    nx, ny = f.shape[:2]
+    return _fft_interp2d(c, *f.shape[:2], n1, n2, sx, sy, dx, dy)
+
+
+def _fft_interp2d(c, nx, ny, n1, n2, sx, sy, dx, dy):
     if (sx is not None) and (sy is not None):
         tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
@@ -85,31 +90,30 @@ def fft_interp2d(
         c = (c[None].T * (sx[None] * sy[:, None])).T
         c = jnp.moveaxis(c, 0, -1)
 
-    pad = n1 - nx
-    pad = (pad // 2, pad - pad // 2)
-    if nx % 2 != 0:
-        pad = pad[::-1]
-    c = jnp.fft.ifftshift(
-        _pad_along_axis(jnp.fft.fftshift(c, axes=0), pad, axis=0), axes=0
-    )
+    return jnp.fft.irfft2(_fft_pad(c, n1, nx), (n1, n2), axes=(0, 1), norm="forward")
 
-    return jnp.fft.irfft2(c, (n1, n2), axes=(0, 1), norm="forward")
+
+def _fft_pad(c, n_out, n_in, axis=0):
+    p = n_out - n_in
+    p = (p // 2, p - p // 2)
+    if n_in % 2 != 0:
+        p = p[::-1]
+    return jnp.fft.ifftshift(_pad_along_axis(jnp.fft.fftshift(c, axis), p, axis), axis)
 
 
 def _pad_along_axis(array: jax.Array, pad: tuple = (0, 0), axis: int = 0):
     """Pad with zeros or truncate a given dimension."""
     index = [slice(None)] * array.ndim
+    pad_width = [(0, 0)] * array.ndim
     start = stop = None
 
     if pad[0] < 0:
-        start = abs(pad[0])
+        start = -pad[0]
         pad = (0, pad[1])
     if pad[1] < 0:
-        stop = -abs(pad[1])
+        stop = pad[1]
         pad = (pad[0], 0)
 
     index[axis] = slice(start, stop)
-    pad_width = [(0, 0)] * array.ndim
     pad_width[axis] = pad
-
     return jnp.pad(array[tuple(index)], pad_width)

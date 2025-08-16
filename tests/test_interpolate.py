@@ -321,7 +321,7 @@ def test_fft_interp1d():
         fi = f1[sp][1]
         fs = fun(x[sp][1] + 0.2)
         np.testing.assert_allclose(
-            fs, fft_interp1d(fi, *fi.shape, sx=0.2, dx=np.diff(x[sp][1])[0]).squeeze()
+            fft_interp1d(fi, *fi.shape, sx=0.2, dx=np.diff(x[sp][1])[0]).squeeze(), fs
         )
         for ep in ["o", "e"]:  # eval parity
             for s in ["up", "down"]:  # up or downsample
@@ -333,7 +333,7 @@ def test_fft_interp1d():
                     xe = 1
                 true = fun(x[ep][xe])
                 interp = fft_interp1d(f1[sp][xs], x[ep][xe].size)
-                np.testing.assert_allclose(true, interp, atol=1e-12, rtol=1e-12)
+                np.testing.assert_allclose(interp, true, atol=1e-12, rtol=1e-12)
 
 
 @pytest.mark.unit
@@ -375,7 +375,6 @@ def test_fft_interp2d():
             fi = f2[spx][spy][1][1]
             fs = fun2(x[spx][1] + 0.2, y[spy][1] + 0.3)
             np.testing.assert_allclose(
-                fs,
                 fft_interp2d(
                     fi,
                     *fi.shape,
@@ -384,6 +383,7 @@ def test_fft_interp2d():
                     dx=np.diff(x[spx][1])[0],
                     dy=np.diff(y[spy][1])[0]
                 ).squeeze(),
+                fs,
             )
             for epx in ["o", "e"]:  # eval parity x
                 for epy in ["o", "e"]:  # eval parity y
@@ -406,7 +406,7 @@ def test_fft_interp2d():
                                 f2[spx][spy][xs][ys], x[epx][xe].size, y[epy][ye].size
                             )
                             np.testing.assert_allclose(
-                                true, interp, atol=1e-12, rtol=1e-12
+                                interp, true, atol=1e-12, rtol=1e-12
                             )
 
 
