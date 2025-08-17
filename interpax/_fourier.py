@@ -33,9 +33,11 @@ def fft_interp1d(
         Interpolated (and possibly shifted) data points
     """
     f = asarray_inexact(f)
-    nx = f.shape[0]
     c = jnp.fft.rfft(f, axis=0, norm="forward")
+    return _fft_interp1d(c, f.shape[0], n, sx, dx)
 
+
+def _fft_interp1d(c, nx, n, sx, dx):
     if sx is not None:
         tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
@@ -43,7 +45,19 @@ def fft_interp1d(
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
 
-    return jnp.fft.irfft(c, n, axis=0, norm="forward")
+    if n >= nx:
+        return jnp.fft.irfft(c, n, axis=0, norm="forward")
+
+    if n < c.shape[0]:
+        c = c[:n]
+    elif nx % 2 == 0:
+        c = c.at[-1].divide(2)
+    c = c.at[0].divide(2) * 2
+
+    x = jnp.linspace(0, dx * nx, n, endpoint=False)
+    x = jnp.exp(1j * (c.shape[0] // 2) * x).reshape(n, *((1,) * (c.ndim - 1)))
+    c = _fft_pad(c, n, 0)
+    return (jnp.fft.ifft(c, axis=0, norm="forward") * x).real
 
 
 @wrap_jit(static_argnames=["n1", "n2"])
@@ -90,15 +104,29 @@ def _fft_interp2d(c, nx, ny, n1, n2, sx, sy, dx, dy):
         c = (c[None].T * (sx[None] * sy[:, None])).T
         c = jnp.moveaxis(c, 0, -1)
 
-    return jnp.fft.irfft2(_fft_pad(c, n1, nx), (n1, n2), axes=(0, 1), norm="forward")
+    c = _fft_pad(jnp.fft.fftshift(c, 0), n1, 0)
+    if n2 >= ny:
+        return jnp.fft.irfft2(c, (n1, n2), axes=(0, 1), norm="forward")
+
+    if n2 < c.shape[1]:
+        c = c[:, :n2]
+    elif ny % 2 == 0:
+        c = c.at[:, -1].divide(2)
+    c = c.at[:, 0].divide(2) * 2
+
+    y = jnp.linspace(0, dy * ny, n2, endpoint=False)
+    y = jnp.exp(1j * (c.shape[1] // 2) * y).reshape(1, n2, *((1,) * (c.ndim - 2)))
+    c = _fft_pad(c, n2, 1)
+    return (jnp.fft.ifft2(c, axes=(0, 1), norm="forward") * y).real
 
 
-def _fft_pad(c, n_out, n_in, axis=0):
+def _fft_pad(c_shift, n_out, axis):
+    n_in = c_shift.shape[axis]
     p = n_out - n_in
     p = (p // 2, p - p // 2)
     if n_in % 2 != 0:
         p = p[::-1]
-    return jnp.fft.ifftshift(_pad_along_axis(jnp.fft.fftshift(c, axis), p, axis), axis)
+    return jnp.fft.ifftshift(_pad_along_axis(c_shift, p, axis), axis)
 
 
 def _pad_along_axis(array: jax.Array, pad: tuple = (0, 0), axis: int = 0):
