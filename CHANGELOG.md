@@ -14,7 +14,7 @@ functions.
 with respect to each coordinate individually.
 - Upgrades FFT interpolation to use the real fast Fourier transform.
 - Upgrades FFT interpolation to preserve double the width of the frequency spectrum
-with negligible additional computation.
+with no additional computation.
 
 
 v0.2.4
