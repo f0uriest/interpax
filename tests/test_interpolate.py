@@ -317,11 +317,12 @@ def test_fft_interp1d():
         for i in [1, 2]:
             f1[p][i] = fun(x[p][i])
 
+    sx = 0.2
     for sp in ["o", "e"]:  # source parity
         fi = f1[sp][1]
-        fs = fun(x[sp][1] + 0.2)
+        fs = fun(x[sp][1] + sx)
         np.testing.assert_allclose(
-            fs, fft_interp1d(fi, *fi.shape, sx=0.2, dx=np.diff(x[sp][1])[0]).squeeze()
+            fft_interp1d(fi, *fi.shape, sx, dx=x[sp][1][1] - x[sp][1][0]).squeeze(), fs
         )
         for ep in ["o", "e"]:  # eval parity
             for s in ["up", "down"]:  # up or downsample
@@ -331,9 +332,11 @@ def test_fft_interp1d():
                 else:
                     xs = 2
                     xe = 1
-                true = fun(x[ep][xe])
-                interp = fft_interp1d(f1[sp][xs], x[ep][xe].size)
-                np.testing.assert_allclose(true, interp, atol=1e-12, rtol=1e-12)
+                true = fun(x[ep][xe] + sx)
+                interp = fft_interp1d(
+                    f1[sp][xs], x[ep][xe].size, sx, dx=x[sp][xs][1] - x[sp][xs][0]
+                ).squeeze()
+                np.testing.assert_allclose(interp, true, atol=1e-12, rtol=1e-12)
 
 
 @pytest.mark.unit
@@ -370,20 +373,22 @@ def test_fft_interp2d():
                 for j in [1, 2]:
                     f2[xp][yp][i][j] = fun2(x[xp][i], y[yp][j])
 
+    shiftx = 0.2
+    shifty = 0.3
     for spx in ["o", "e"]:  # source parity x
         for spy in ["o", "e"]:  # source parity y
             fi = f2[spx][spy][1][1]
-            fs = fun2(x[spx][1] + 0.2, y[spy][1] + 0.3)
+            fs = fun2(x[spx][1] + shiftx, y[spy][1] + shifty)
             np.testing.assert_allclose(
-                fs,
                 fft_interp2d(
                     fi,
                     *fi.shape,
-                    sx=0.2,
-                    sy=0.3,
+                    shiftx,
+                    shifty,
                     dx=np.diff(x[spx][1])[0],
                     dy=np.diff(y[spy][1])[0]
                 ).squeeze(),
+                fs,
             )
             for epx in ["o", "e"]:  # eval parity x
                 for epy in ["o", "e"]:  # eval parity y
@@ -401,12 +406,19 @@ def test_fft_interp2d():
                             else:
                                 ys = 2
                                 ye = 1
-                            true = fun2(x[epx][xe], y[epy][ye])
+
+                            true = fun2(x[epx][xe] + shiftx, y[epy][ye] + shifty)
                             interp = fft_interp2d(
-                                f2[spx][spy][xs][ys], x[epx][xe].size, y[epy][ye].size
-                            )
+                                f2[spx][spy][xs][ys],
+                                x[epx][xe].size,
+                                y[epy][ye].size,
+                                shiftx,
+                                shifty,
+                                dx=x[spx][xs][1] - x[spx][xs][0],
+                                dy=y[spy][ys][1] - y[spy][ys][0],
+                            ).squeeze()
                             np.testing.assert_allclose(
-                                true, interp, atol=1e-12, rtol=1e-12
+                                interp, true, atol=1e-12, rtol=1e-12
                             )
 
 
