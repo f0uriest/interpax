@@ -157,7 +157,7 @@ def ifft_interp2d(
     Parameters
     ----------
     c : ndarray, shape(nx, ny // 2 + 1, ...)
-        Fourier coefficients ``jnp.fft.rfft2(f,axis=(0,1),norm="forward")``.
+        Fourier coefficients ``jnp.fft.rfft2(f,axes=(0,1),norm="forward")``.
     ny : bool
         Number of sample points in y coordinate, e.g. ``f.shape[1]``.
     n1, n2 : int
