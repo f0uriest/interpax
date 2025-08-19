@@ -23,21 +23,48 @@ def fft_interp1d(
     n : int
         Number of desired interpolation points.
     sx : ndarray or None
-        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx)
+        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx).
     dx : float
-        Spacing of source points
+        Spacing of source points.
 
     Returns
     -------
     fi : ndarray, shape(n, ..., len(sx))
-        Interpolated (and possibly shifted) data points
+        Interpolated (and possibly shifted) data points.
+
     """
     f = asarray_inexact(f)
-    c = jnp.fft.rfft(f, axis=0, norm="forward")
-    return _fft_interp1d(c, f.shape[0], n, sx, dx)
+    return ifft_interp1d(jnp.fft.rfft(f, axis=0, norm="forward"), f.shape[0], n, sx, dx)
 
 
-def _fft_interp1d(c, nx, n, sx, dx):
+def ifft_interp1d(
+    c,
+    nx: int,
+    n: int,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
+    dx: float = 1.0,
+) -> Inexact[Array, "n ... s"]:
+    """Interpolation of a 1D Hermitian Fourier series via FFT.
+
+    Parameters
+    ----------
+    c : ndarray, shape(nx // 2 + 1, ...)
+        Fourier coefficients ``jnp.fft.rfft(f,axis=0,norm="forward")``.
+    nx : bool
+        Number of sample points e.g. ``f.shape[0]``.
+    n : int
+        Number of desired interpolation points.
+    sx : ndarray or None
+        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx).
+    dx : float
+        Spacing of source points.
+
+    Returns
+    -------
+    fi : ndarray, shape(n, ..., len(sx))
+        Interpolated (and possibly shifted) data points.
+
+    """
     if sx is not None:
         tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
@@ -78,29 +105,80 @@ def fft_interp2d(
     f : ndarray, shape(nx, ny, ...)
         Source data. Assumed to cover 1 full period, excluding the endpoint.
     n1, n2 : int
-        Number of desired interpolation points in x and y directions
+        Number of desired interpolation points in x and y directions.
     sx, sy : ndarray or None
         Shift in x and y to evaluate at. If original data is f(x,y), interpolates to
-        f(x + sx, y + sy). Both must be provided or None
+        f(x + sx, y + sy). Both must be provided or None.
     dx, dy : float
-        Spacing of source points in x and y
+        Spacing of source points in x and y.
 
     Returns
     -------
     fi : ndarray, shape(n1, n2, ..., len(sx))
-        Interpolated (and possibly shifted) data points
+        Interpolated (and possibly shifted) data points.
+
     """
-    f = asarray_inexact(f)
-    c = jnp.fft.rfft2(f, axes=(0, 1), norm="forward")
-    return _fft_interp2d(c, *f.shape[:2], n1, n2, sx, sy, dx, dy)
+    nx, ny = f.shape[:2]
+
+    # https://github.com/f0uriest/interpax/pull/117
+    if n1 < nx:
+        f = fft_interp1d(f, n1, sx, dx)
+        f = fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).swapaxes(0, 1)
+        return f
+    if n2 < ny:
+        f = fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).swapaxes(0, 1)
+        f = fft_interp1d(f, n1, sx, dx)
+        return f
+
+    return ifft_interp2d(
+        jnp.fft.rfft2(asarray_inexact(f), axes=(0, 1), norm="forward"),
+        ny,
+        n1,
+        n2,
+        sx,
+        sy,
+        dx,
+        dy,
+    )
 
 
-def _fft_interp2d(c, nx, ny, n1, n2, sx, sy, dx, dy):
+def ifft_interp2d(
+    c,
+    ny: int,
+    n1: int,
+    n2: int,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
+    sy: Optional[Num[ArrayLike, " s"]] = None,
+    dx: float = 1.0,
+    dy: float = 1.0,
+) -> Inexact[Array, "n1 n2 ... s"]:
+    """Interpolation of 2D Hermitian Fourier series via FFT.
+
+    Parameters
+    ----------
+    c : ndarray, shape(nx, ny // 2 + 1, ...)
+        Fourier coefficients ``jnp.fft.rfft2(f,axis=(0,1),norm="forward")``.
+    ny : bool
+        Number of sample points in y coordinate, e.g. ``f.shape[1]``.
+    n1, n2 : int
+        Number of desired interpolation points in x and y directions.
+    sx, sy : ndarray or None
+        Shift in x and y to evaluate at. If original data is f(x,y), interpolates to
+        f(x + sx, y + sy). Both must be provided or None.
+    dx, dy : float
+        Spacing of source points in x and y.
+
+    Returns
+    -------
+    fi : ndarray, shape(n1, n2, ..., len(sx))
+        Interpolated (and possibly shifted) data points.
+
+    """
     if (sx is not None) and (sy is not None):
         tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
         sy = asarray_inexact(sy)
-        sx = jnp.exp(1j * jnp.fft.fftfreq(nx, dx / tau)[:, None] * sx)
+        sx = jnp.exp(1j * jnp.fft.fftfreq(c.shape[0], dx / tau)[:, None] * sx)
         sy = jnp.exp(1j * jnp.fft.rfftfreq(ny, dy / tau)[:, None] * sy)
         c = (c[None].T * (sx[None] * sy[:, None])).T
         c = jnp.moveaxis(c, 0, -1)
