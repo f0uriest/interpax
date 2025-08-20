@@ -65,19 +65,23 @@ def ifft_interp1d(
         Interpolated (and possibly shifted) data points.
 
     """
+    nx_half = c.shape[0]
+    if n < nx_half:
+        # truncate early to reduce computation when shifting
+        c = c[:n]
+
     if sx is not None:
         tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
-        sx = jnp.exp(1j * jnp.fft.rfftfreq(nx, dx / tau)[:, None] * sx)
+        sx = jnp.exp(1j * jnp.fft.rfftfreq(nx, dx / tau)[: c.shape[0], None] * sx)
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
 
     if n >= nx:
         return jnp.fft.irfft(c, n, axis=0, norm="forward")
 
-    if n < c.shape[0]:
-        c = c[:n]
-    elif nx % 2 == 0:
+    if (n >= nx_half) and (nx % 2 == 0):
+        # then we had not truncated, and we need to half the top frequency
         c = c.at[-1].divide(2)
     c = c.at[0].divide(2) * 2
 
@@ -174,12 +178,18 @@ def ifft_interp2d(
         Interpolated (and possibly shifted) data points.
 
     """
+    nx = c.shape[0]
+    ny_half = c.shape[1]
+    if n2 < ny_half:
+        # truncate early to reduce computation when shifting
+        c = c[:, :n2]
+
     if (sx is not None) and (sy is not None):
         tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
         sy = asarray_inexact(sy)
-        sx = jnp.exp(1j * jnp.fft.fftfreq(c.shape[0], dx / tau)[:, None] * sx)
-        sy = jnp.exp(1j * jnp.fft.rfftfreq(ny, dy / tau)[:, None] * sy)
+        sx = jnp.exp(1j * jnp.fft.fftfreq(nx, dx / tau)[:, None] * sx)
+        sy = jnp.exp(1j * jnp.fft.rfftfreq(ny, dy / tau)[: c.shape[1], None] * sy)
         c = (c[None].T * (sx[None] * sy[:, None])).T
         c = jnp.moveaxis(c, 0, -1)
 
@@ -187,9 +197,8 @@ def ifft_interp2d(
     if n2 >= ny:
         return jnp.fft.irfft2(c, (n1, n2), axes=(0, 1), norm="forward")
 
-    if n2 < c.shape[1]:
-        c = c[:, :n2]
-    elif ny % 2 == 0:
+    if (n2 >= c.shape[1]) and (ny % 2 == 0):
+        # then we had not truncated, and we need to half the top frequency
         c = c.at[:, -1].divide(2)
     c = c.at[:, 0].divide(2) * 2
 
