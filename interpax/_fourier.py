@@ -197,7 +197,7 @@ def ifft_interp2d(
     if n2 >= ny:
         return jnp.fft.irfft2(c, (n1, n2), axes=(0, 1), norm="forward")
 
-    if (n2 >= c.shape[1]) and (ny % 2 == 0):
+    if (n2 >= ny_half) and (ny % 2 == 0):
         # then we had not truncated, and we need to half the top frequency
         c = c.at[:, -1].divide(2)
     c = c.at[:, 0].divide(2) * 2
