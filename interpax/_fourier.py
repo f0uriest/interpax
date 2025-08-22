@@ -71,9 +71,8 @@ def ifft_interp1d(
         c = c[:n]
 
     if sx is not None:
-        tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
-        sx = jnp.exp(1j * jnp.fft.rfftfreq(nx, dx / tau)[: c.shape[0], None] * sx)
+        sx = jnp.exp(1j * _rfftfreq(c.shape[0], nx, dx)[:, None] * sx)
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
 
@@ -185,11 +184,11 @@ def ifft_interp2d(
         c = c[:, :n2]
 
     if (sx is not None) and (sy is not None):
-        tau = 2 * jnp.pi
         sx = asarray_inexact(sx)
         sy = asarray_inexact(sy)
+        tau = 2 * jnp.pi
         sx = jnp.exp(1j * jnp.fft.fftfreq(nx, dx / tau)[:, None] * sx)
-        sy = jnp.exp(1j * jnp.fft.rfftfreq(ny, dy / tau)[: c.shape[1], None] * sy)
+        sy = jnp.exp(1j * _rfftfreq(c.shape[1], ny, dy)[:, None] * sy)
         c = (c[None].T * (sx[None] * sy[:, None])).T
         c = jnp.moveaxis(c, 0, -1)
 
@@ -208,6 +207,10 @@ def ifft_interp2d(
     c = jnp.fft.ifft(c, axis=0, norm="forward")
     c = _fft_pad(c, n2, 1)
     return (jnp.fft.ifft(c, axis=1, norm="forward") * y).real
+
+
+def _rfftfreq(n, nx, dx):
+    return jnp.arange(n) * (2 * jnp.pi / (nx * dx))
 
 
 def _fft_pad(c_shift, n_out, axis):
