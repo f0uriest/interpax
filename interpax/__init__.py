@@ -2,7 +2,7 @@
 
 from . import _version
 from ._fd_derivs import approx_df
-from ._fourier import fft_interp1d, fft_interp2d
+from ._fourier import fft_interp1d, fft_interp2d, ifft_interp1d, ifft_interp2d
 from ._ppoly import (
     Akima1DInterpolator,
     CubicHermiteSpline,
