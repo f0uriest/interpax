@@ -124,14 +124,21 @@ def fft_interp2d(
     nx, ny = f.shape[:2]
 
     # https://github.com/f0uriest/interpax/pull/117
-    if n1 < nx:
-        f = fft_interp1d(f, n1, sx, dx)
-        f = fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).swapaxes(0, 1)
-        return f
-    if n2 < ny:
-        f = fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).swapaxes(0, 1)
-        f = fft_interp1d(f, n1, sx, dx)
-        return f
+    if (sx is None or jnp.size(sx) == 1) and (sy is None or jnp.size(sy) == 1):
+        if n1 < nx:
+            return fft_interp1d(
+                fft_interp1d(f, n1, sx, dx).squeeze(-1).swapaxes(0, 1),
+                n2,
+                sy,
+                dy,
+            ).swapaxes(0, 1)
+        if n2 < ny:
+            return fft_interp1d(
+                fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).squeeze(-1).swapaxes(0, 1),
+                n1,
+                sx,
+                dx,
+            )
 
     return ifft_interp2d(
         jnp.fft.rfft2(asarray_inexact(f), axes=(0, 1), norm="forward"),
