@@ -54,7 +54,7 @@ def _fft_interp1d(c, nx, n, sx, dx):
         c = c.at[-1].divide(2)
     c = c.at[0].divide(2) * 2
 
-    x = jnp.linspace(0, dx * nx, n, endpoint=False)
+    x = jnp.linspace(0, 2 * jnp.pi, n, endpoint=False)
     x = jnp.exp(1j * (c.shape[0] // 2) * x).reshape(n, *((1,) * (c.ndim - 1)))
 
     c = _fft_pad(c, n, 0)
@@ -115,7 +115,7 @@ def _fft_interp2d(c, nx, ny, n1, n2, sx, sy, dx, dy):
         c = c.at[:, -1].divide(2)
     c = c.at[:, 0].divide(2) * 2
 
-    y = jnp.linspace(0, dy * ny, n2, endpoint=False)
+    y = jnp.linspace(0, 2 * jnp.pi, n2, endpoint=False)
     y = jnp.exp(1j * (c.shape[1] // 2) * y).reshape(1, n2, *((1,) * (c.ndim - 2)))
 
     c = jnp.fft.ifft(c, axis=0, norm="forward")
