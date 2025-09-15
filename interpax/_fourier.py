@@ -14,7 +14,7 @@ def fft_interp1d(
     sx: Optional[Num[ArrayLike, " s"]] = None,
     dx: float = 1.0,
 ) -> Inexact[Array, "n ... s"]:
-    """Interpolation of a 1d periodic function via FFT.
+    """Interpolation of a real-valued 1D periodic function via FFT.
 
     Parameters
     ----------
@@ -23,28 +23,72 @@ def fft_interp1d(
     n : int
         Number of desired interpolation points.
     sx : ndarray or None
-        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx)
+        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx).
     dx : float
-        Spacing of source points
+        Spacing of source points.
 
     Returns
     -------
     fi : ndarray, shape(n, ..., len(sx))
-        Interpolated (and possibly shifted) data points
+        Interpolated (and possibly shifted) data points.
+
     """
     f = asarray_inexact(f)
-    c = jnp.fft.ifft(f, axis=0)
-    nx = c.shape[0]
+    return ifft_interp1d(jnp.fft.rfft(f, axis=0, norm="forward"), f.shape[0], n, sx, dx)
+
+
+def ifft_interp1d(
+    c,
+    nx: int,
+    n: int,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
+    dx: float = 1.0,
+) -> Inexact[Array, "n ... s"]:
+    """Interpolation of a 1D Hermitian Fourier series via FFT.
+
+    Parameters
+    ----------
+    c : ndarray, shape(nx // 2 + 1, ...)
+        Fourier coefficients ``jnp.fft.rfft(f,axis=0,norm="forward")``.
+    nx : bool
+        Number of sample points e.g. ``f.shape[0]``.
+    n : int
+        Number of desired interpolation points.
+    sx : ndarray or None
+        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx).
+    dx : float
+        Spacing of source points.
+
+    Returns
+    -------
+    fi : ndarray, shape(n, ..., len(sx))
+        Interpolated (and possibly shifted) data points.
+
+    """
+    nx_half = c.shape[0]
+    if n < nx_half:
+        # truncate early to reduce computation
+        c = c[:n]
+
     if sx is not None:
         sx = asarray_inexact(sx)
-        sx = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(nx)[:, None] * sx / dx)
+        sx = jnp.exp(1j * _rfftfreq(c.shape[0], nx, dx)[:, None] * sx)
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
-    pad = ((n - nx) // 2, n - nx - (n - nx) // 2)
-    if nx % 2 != 0:
-        pad = pad[::-1]
-    c = jnp.fft.ifftshift(_pad_along_axis(jnp.fft.fftshift(c, axes=0), pad, axis=0))
-    return jnp.fft.fft(c, axis=0).real
+
+    if n >= nx:
+        return jnp.fft.irfft(c, n, axis=0, norm="forward")
+
+    if (n >= nx_half) and (nx % 2 == 0):
+        # then we had not truncated, and we need to half the top frequency
+        c = c.at[-1].divide(2)
+    c = c.at[0].divide(2) * 2
+
+    x = jnp.linspace(0, 2 * jnp.pi, n, endpoint=False)
+    x = jnp.exp(1j * (c.shape[0] // 2) * x).reshape(n, *((1,) * (c.ndim - 1)))
+
+    c = _fft_pad(c, n, 0)
+    return (jnp.fft.ifft(c, axis=0, norm="forward") * x).real
 
 
 @wrap_jit(static_argnames=["n1", "n2"])
@@ -57,65 +101,143 @@ def fft_interp2d(
     dx: float = 1.0,
     dy: float = 1.0,
 ) -> Inexact[Array, "n1 n2 ... s"]:
-    """Interpolation of a 2d periodic function via FFT.
+    """Interpolation of a real-valued 2D periodic function via FFT.
 
     Parameters
     ----------
     f : ndarray, shape(nx, ny, ...)
         Source data. Assumed to cover 1 full period, excluding the endpoint.
     n1, n2 : int
-        Number of desired interpolation points in x and y directions
+        Number of desired interpolation points in x and y directions.
     sx, sy : ndarray or None
         Shift in x and y to evaluate at. If original data is f(x,y), interpolates to
-        f(x + sx, y + sy). Both must be provided or None
+        f(x + sx, y + sy). Both must be provided or None.
     dx, dy : float
-        Spacing of source points in x and y
+        Spacing of source points in x and y.
 
     Returns
     -------
     fi : ndarray, shape(n1, n2, ..., len(sx))
-        Interpolated (and possibly shifted) data points
+        Interpolated (and possibly shifted) data points.
+
     """
-    f = asarray_inexact(f)
-    c = jnp.fft.ifft2(f, axes=(0, 1))
-    nx, ny = c.shape[:2]
+    nx, ny = f.shape[:2]
+
+    # https://github.com/f0uriest/interpax/pull/117
+    if (sx is None or jnp.size(sx) == 1) and (sy is None or jnp.size(sy) == 1):
+        if n1 < nx:
+            f = fft_interp1d(f, n1, sx, dx)
+            if sx is not None:
+                f = f.squeeze(-1)
+            return fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).swapaxes(0, 1)
+        if n2 < ny:
+            f = fft_interp1d(f.swapaxes(0, 1), n2, sy, dy)
+            if sy is not None:
+                f = f.squeeze(-1)
+            return fft_interp1d(f.swapaxes(0, 1), n1, sx, dx)
+
+    return ifft_interp2d(
+        jnp.fft.rfft2(asarray_inexact(f), axes=(0, 1), norm="forward"),
+        ny,
+        n1,
+        n2,
+        sx,
+        sy,
+        dx,
+        dy,
+    )
+
+
+def ifft_interp2d(
+    c,
+    ny: int,
+    n1: int,
+    n2: int,
+    sx: Optional[Num[ArrayLike, " s"]] = None,
+    sy: Optional[Num[ArrayLike, " s"]] = None,
+    dx: float = 1.0,
+    dy: float = 1.0,
+) -> Inexact[Array, "n1 n2 ... s"]:
+    """Interpolation of 2D Hermitian Fourier series via FFT.
+
+    Parameters
+    ----------
+    c : ndarray, shape(nx, ny // 2 + 1, ...)
+        Fourier coefficients ``jnp.fft.rfft2(f,axes=(0,1),norm="forward")``.
+    ny : bool
+        Number of sample points in y coordinate, e.g. ``f.shape[1]``.
+    n1, n2 : int
+        Number of desired interpolation points in x and y directions.
+    sx, sy : ndarray or None
+        Shift in x and y to evaluate at. If original data is f(x,y), interpolates to
+        f(x + sx, y + sy). Both must be provided or None.
+    dx, dy : float
+        Spacing of source points in x and y.
+
+    Returns
+    -------
+    fi : ndarray, shape(n1, n2, ..., len(sx))
+        Interpolated (and possibly shifted) data points.
+
+    """
+    nx = c.shape[0]
+    ny_half = c.shape[1]
+    if n2 < ny_half:
+        # truncate early to reduce computation
+        c = c[:, :n2]
+
     if (sx is not None) and (sy is not None):
         sx = asarray_inexact(sx)
         sy = asarray_inexact(sy)
-        sx = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(nx)[:, None] * sx / dx)
-        sy = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(ny)[:, None] * sy / dy)
-        c = (c[None].T * sx[None, :, :] * sy[:, None, :]).T
+        tau = 2 * jnp.pi
+        sx = jnp.exp(1j * jnp.fft.fftfreq(nx, dx / tau)[:, None] * sx)
+        sy = jnp.exp(1j * _rfftfreq(c.shape[1], ny, dy)[:, None] * sy)
+        c = (c[None].T * (sx[None] * sy[:, None])).T
         c = jnp.moveaxis(c, 0, -1)
-    padx = ((n1 - nx) // 2, n1 - nx - (n1 - nx) // 2)
-    pady = ((n2 - ny) // 2, n2 - ny - (n2 - ny) // 2)
-    if nx % 2 != 0:
-        padx = padx[::-1]
-    if ny % 2 != 0:
-        pady = pady[::-1]
 
-    c = jnp.fft.ifftshift(
-        _pad_along_axis(jnp.fft.fftshift(c, axes=0), padx, axis=0), axes=0
-    )
-    c = jnp.fft.ifftshift(
-        _pad_along_axis(jnp.fft.fftshift(c, axes=1), pady, axis=1), axes=1
-    )
+    c = _fft_pad(jnp.fft.fftshift(c, 0), n1, 0)
+    if n2 >= ny:
+        return jnp.fft.irfft2(c, (n1, n2), axes=(0, 1), norm="forward")
 
-    return jnp.fft.fft2(c, axes=(0, 1)).real
+    if (n2 >= ny_half) and (ny % 2 == 0):
+        # then we had not truncated, and we need to half the top frequency
+        c = c.at[:, -1].divide(2)
+    c = c.at[:, 0].divide(2) * 2
+
+    y = jnp.linspace(0, 2 * jnp.pi, n2, endpoint=False)
+    y = jnp.exp(1j * (c.shape[1] // 2) * y).reshape(1, n2, *((1,) * (c.ndim - 2)))
+
+    c = jnp.fft.ifft(c, axis=0, norm="forward")
+    c = _fft_pad(c, n2, 1)
+    return (jnp.fft.ifft(c, axis=1, norm="forward") * y).real
+
+
+def _rfftfreq(n, nx, dx):
+    return jnp.arange(n) * (2 * jnp.pi / (nx * dx))
+
+
+def _fft_pad(c_shift, n_out, axis):
+    n_in = c_shift.shape[axis]
+    p = n_out - n_in
+    p = (p // 2, p - p // 2)
+    if n_in % 2 != 0:
+        p = p[::-1]
+    return jnp.fft.ifftshift(_pad_along_axis(c_shift, p, axis), axis)
 
 
 def _pad_along_axis(array: jax.Array, pad: tuple = (0, 0), axis: int = 0):
     """Pad with zeros or truncate a given dimension."""
-    array = jnp.moveaxis(array, axis, 0)
+    index = [slice(None)] * array.ndim
+    pad_width = [(0, 0)] * array.ndim
+    start = stop = None
 
     if pad[0] < 0:
-        array = array[abs(pad[0]) :]
+        start = -pad[0]
         pad = (0, pad[1])
     if pad[1] < 0:
-        array = array[: -abs(pad[1])]
+        stop = pad[1]
         pad = (pad[0], 0)
 
-    npad = [(0, 0)] * array.ndim
-    npad[0] = pad
-
-    array = jnp.pad(array, pad_width=npad, mode="constant", constant_values=0)
-    return jnp.moveaxis(array, 0, axis)
+    index[axis] = slice(start, stop)
+    pad_width[axis] = pad
+    return jnp.pad(array[tuple(index)], pad_width)
