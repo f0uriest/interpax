@@ -67,7 +67,7 @@ def ifft_interp1d(
     """
     nx_half = c.shape[0]
     if n < nx_half:
-        # truncate early to reduce computation when shifting
+        # truncate early to reduce computation
         c = c[:n]
 
     if sx is not None:
@@ -183,7 +183,7 @@ def ifft_interp2d(
     nx = c.shape[0]
     ny_half = c.shape[1]
     if n2 < ny_half:
-        # truncate early to reduce computation when shifting
+        # truncate early to reduce computation
         c = c[:, :n2]
 
     if (sx is not None) and (sy is not None):
