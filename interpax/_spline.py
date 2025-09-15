@@ -530,7 +530,7 @@ def interp1d(
             return f[i]
 
         def derivative1_nearest():
-            return jnp.zeros((xq.size, *f.shape[1:]))
+            return jnp.zeros((xq.size, *f.shape[1:]), dtype=f.dtype)
 
         fq = jax.lax.switch(derivative, [derivative0_nearest, derivative1_nearest])
 
@@ -557,7 +557,7 @@ def interp1d(
             return (df.T * dxi).T
 
         def derivative2_linear():
-            return jnp.zeros((xq.size, *f.shape[1:]))
+            return jnp.zeros((xq.size, *f.shape[1:]), dtype=f.dtype)
 
         fq = jax.lax.switch(
             derivative, [derivative0_linear, derivative1_linear, derivative2_linear]
@@ -712,7 +712,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
             return jax.vmap(lambda a, b: jnp.take(a, b, axis=-1))(neighbors_f.T, idx)
 
         def derivative1():
-            return jnp.zeros((xq.size, *f.shape[2:]))
+            return jnp.zeros((xq.size, *f.shape[2:]), dtype=f.dtype)
 
         fq = jax.lax.cond(
             (derivative_x == 0) & (derivative_y == 0), derivative0, derivative1
@@ -960,7 +960,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
             return jax.vmap(lambda a, b: jnp.take(a, b, axis=-1))(neighbors_f.T, idx)
 
         def derivative1():
-            return jnp.zeros((xq.size, *f.shape[3:]))
+            return jnp.zeros((xq.size, *f.shape[3:]), dtype=f.dtype)
 
         fq = jax.lax.cond(
             (derivative_x == 0) & (derivative_y == 0) & (derivative_z == 0),

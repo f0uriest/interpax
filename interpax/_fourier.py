@@ -44,7 +44,11 @@ def fft_interp1d(
     if nx % 2 != 0:
         pad = pad[::-1]
     c = jnp.fft.ifftshift(_pad_along_axis(jnp.fft.fftshift(c, axes=0), pad, axis=0))
-    return jnp.fft.fft(c, axis=0).real
+    out = jnp.fft.fft(c, axis=0)
+    if jnp.iscomplexobj(f):
+        return out.astype(f.dtype)
+    else:
+        return (out.real).astype(f.dtype)
 
 
 @wrap_jit(static_argnames=["n1", "n2"])
@@ -100,7 +104,11 @@ def fft_interp2d(
         _pad_along_axis(jnp.fft.fftshift(c, axes=1), pady, axis=1), axes=1
     )
 
-    return jnp.fft.fft2(c, axes=(0, 1)).real
+    out = jnp.fft.fft2(c, axes=(0, 1))
+    if jnp.iscomplexobj(f):
+        return out.astype(f.dtype)
+    else:
+        return (out.real).astype(f.dtype)
 
 
 def _pad_along_axis(array: jax.Array, pad: tuple = (0, 0), axis: int = 0):
