@@ -1,6 +1,10 @@
 Changelog
 =========
 
+- [Improves FFT interpolation](https://github.com/f0uriest/interpax/pull/116)
+  - The real FFT is now used where possible.
+  - Double the width of the Fourier spectrum is now preserved when interpolating to a less dense grid, at no additional cost.
+  - In the 2D upsampling case, the second transform is now padded only after computing the first transform. In the 2D downsampling case, the second transform is now truncated prior to computing the first transform. This reduces the size of the problem, so the computation is less expensive.
 - Adds a number of classes that replicate most of the functionality of the
 corresponding classes from scipy.interpolate :
   - ``scipy.interpolate.PPoly`` -> ``interpax.PPoly``
@@ -12,10 +16,6 @@ corresponding classes from scipy.interpolate :
 functions.
 - Method ``"monotonic"`` now works in 2D and 3D, where it will preserve monotonicity
 with respect to each coordinate individually.
-- [Improves FFT interpolation](https://github.com/f0uriest/interpax/pull/116)
-  - The real FFT is now used where possible.
-  - Double the width of the Fourier spectrum is now preserved when interpolating to a less dense grid, at no additional cost.
-  - In the 2D upsampling case, the second transform is now padded only after computing the first transform. In the 2D downsampling case, the second transform is now truncated prior to computing the first transform. This reduces the size of the problem, so the computation is less expensive.
 
 
 v0.2.4
