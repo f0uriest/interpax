@@ -52,9 +52,21 @@ def approx_df(
     elif method == "catmull-rom":
         out = _cardinal(x, f, axis, c=0)
     elif method == "monotonic":
-        out = _monotonic(x, f, axis, False)
+        if jnp.iscomplexobj(f):
+            # make real and imag part monotonic separately.
+            out1 = _monotonic(x, f.real, axis, False)
+            out2 = _monotonic(x, f.imag, axis, False)
+            out = out1 + 1j * out2
+        else:
+            out = _monotonic(x, f, axis, False)
     elif method == "monotonic-0":
-        out = _monotonic(x, f, axis, True)
+        if jnp.iscomplexobj(f):
+            # make real and imag part monotonic separately.
+            out1 = _monotonic(x, f.real, axis, True)
+            out2 = _monotonic(x, f.imag, axis, True)
+            out = out1 + 1j * out2
+        else:
+            out = _monotonic(x, f, axis, True)
     elif method == "akima":
         out = _akima(x, f, axis)
     elif method in ("nearest", "linear"):
@@ -343,8 +355,8 @@ def _monotonic(x: jax.Array, f: jax.Array, axis: int, zero_slope: bool):
     dk = jnp.where(condition, 0, 1.0 / whmean)
 
     def slope_zero():
-        d0 = jnp.zeros((1, dk.shape[1]))
-        d1 = jnp.zeros((1, dk.shape[1]))
+        d0 = jnp.zeros((1, dk.shape[1]), dtype=f.dtype)
+        d1 = jnp.zeros((1, dk.shape[1]), dtype=f.dtype)
         return d0, d1
 
     def slope_nonzero():
@@ -382,7 +394,7 @@ def _akima(x, f, axis):
     dx = jnp.diff(x)
     f = jnp.moveaxis(f, axis, 0)
     # determine slopes between breakpoints
-    m = jnp.empty((x.size + 3,) + f.shape[1:])
+    m = jnp.empty((x.size + 3,) + f.shape[1:], dtype=f.dtype)
     dx = dx[(slice(None),) + (None,) * (f.ndim - 1)]
     mask = dx == 0
     dx = jnp.where(mask, 1, dx)
