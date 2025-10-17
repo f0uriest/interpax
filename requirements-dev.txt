@@ -1,7 +1,7 @@
 # standard install requirements
 -r ./requirements.txt
 
-scipy >= 1.10.0, <= 1.15.2
+scipy >= 1.10.0, <= 1.15.3
 
 # building the docs
 sphinx >= 3.0.0, <= 8.2.3
@@ -10,18 +10,18 @@ sphinx-rtd-theme >= 1.0, < 3.0.3
 sphinx-github-style >= 1.0, <= 1.2.2
 
 # linting
-black == 25.1.0
-flake8 >= 5.0.0, <= 7.2.0
+black == 25.9.0
+flake8 >= 5.0.0, <= 7.3.0
 flake8-docstrings >= 1.0.0, <= 1.7.0
 flake8-eradicate >= 1.0.0, <= 1.5.0
 flake8-isort >= 5.0.0, <= 6.1.2
-pre-commit <= 4.2.0
+pre-commit <= 4.3.0
 pyright < 1.2
 
 # testing and benchmarking
-pytest >= 5.0.0, <= 8.4.1
+pytest >= 5.0.0, <= 8.4.2
 pytest-benchmark <= 5.1.0
-pytest-cov >= 2.6.0, <= 6.2.1
+pytest-cov >= 2.6.0, <= 7.0.0
 pytest-monitor <= 1.6.6
 
 # building
