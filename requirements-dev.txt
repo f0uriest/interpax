@@ -20,7 +20,7 @@ pyright < 1.2
 
 # testing and benchmarking
 pytest >= 5.0.0, <= 8.4.2
-pytest-benchmark <= 5.1.0
+pytest-benchmark <= 5.2.0
 pytest-cov >= 2.6.0, <= 7.0.0
 pytest-monitor <= 1.6.6
 
