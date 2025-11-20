@@ -19,7 +19,7 @@ pre-commit <= 4.4.0
 pyright < 1.2
 
 # testing and benchmarking
-pytest >= 5.0.0, <= 8.4.2
+pytest >= 5.0.0, <= 9.0.1
 pytest-benchmark <= 5.2.3
 pytest-cov >= 2.6.0, <= 7.0.0
 pytest-monitor <= 1.6.6
