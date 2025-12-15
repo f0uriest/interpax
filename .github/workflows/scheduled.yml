@@ -31,7 +31,7 @@ jobs:
           python -m pytest -v --durations=0 --cov-report xml:cov.xml --cov-config=setup.cfg --cov=interpax/ --db ./prof.db
       - name: save coverage file and plot comparison results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: unit_test_artifact_${{ matrix.python-version }}
           path: |
