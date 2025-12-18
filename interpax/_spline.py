@@ -1300,9 +1300,8 @@ def _polyroot_vec(
     ):
         # Compute from analytic formula to avoid the issue of complex roots with small
         # imaginary parts and to avoid nan in gradient. Also consumes less memory.
-        r = func[num_coef](
-            *jnp.moveaxis(c[..., :-1], -1, 0), c[..., -1] - k, sentinel, eps, distinct
-        )
+        c = jnp.moveaxis(c, -1, 0)
+        r = func[num_coef](*c[:-1], c[-1] - k, sentinel, eps, distinct)
         # We already filtered distinct roots for quadratics.
         distinct = distinct and num_coef > 3
     else:
