@@ -1291,6 +1291,7 @@ def _polyroot_vec(
     """
     get_only_real_roots = not (a_min is None and a_max is None)
     num_coef = c.shape[-1]
+    distinct = distinct and num_coef > 2
     func = {2: _root_linear, 3: _root_quadratic, 4: _root_cubic}
 
     if (
