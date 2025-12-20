@@ -1407,5 +1407,5 @@ def _root_linear(a, b, sentinel, eps, distinct=False):
 
 
 def _concat_sentinel(r, sentinel, num=1):
-    """Concatenate ``sentinel`` ``num`` times to ``r`` on last axis."""
+    """Concatenate ``sentinel`` ``num`` times to ``r`` on first axis."""
     return jnp.concatenate((r, jnp.broadcast_to(sentinel, (num, *r.shape[1:]))))
