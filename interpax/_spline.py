@@ -1241,14 +1241,14 @@ _roots_companion = jnp.vectorize(
 )
 
 
-def polyroot_vec(
+def _polyroot_vec(
     c,
     k=0.0,
     a_min=None,
     a_max=None,
     sort=False,
     sentinel=jnp.nan,
-    eps=_eps,
+    eps=max(jnp.finfo(jnp.array(1.0).dtype).eps, 2.5e-12),
     distinct=False,
 ):
     """Roots of polynomial with given coefficients.
