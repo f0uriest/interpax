@@ -1241,14 +1241,14 @@ _roots_companion = jnp.vectorize(
 )
 
 
-def _polyroot_vec(
+def polyroot_vec(
     c,
     k=0.0,
     a_min=None,
     a_max=None,
     sort=False,
     sentinel=jnp.nan,
-    eps=max(jnp.finfo(jnp.array(1.0).dtype).eps, 2.5e-12),
+    eps=_eps,
     distinct=False,
 ):
     """Roots of polynomial with given coefficients.
@@ -1302,6 +1302,10 @@ def _polyroot_vec(
         # imaginary parts and to avoid nan in gradient. Also consumes less memory.
         c = jnp.moveaxis(c, -1, 0)
         r = func[num_coef](*c[:-1], c[-1] - k, sentinel, eps, distinct)
+        if num_coef == 2:
+            r = r[jnp.newaxis]
+        r = jnp.moveaxis(r, 0, -1)
+
         # We already filtered distinct roots for quadratics.
         distinct = distinct and num_coef > 3
     else:
@@ -1318,7 +1322,8 @@ def _polyroot_vec(
 
     if sort or distinct:
         r = jnp.sort(r, axis=-1)
-    r = _filter_distinct(r, sentinel, eps) if distinct else r
+    if distinct:
+        r = _filter_distinct(r, sentinel, eps)
     assert r.shape[-1] == num_coef - 1
     return r
 
@@ -1331,7 +1336,7 @@ def _root_cubic(a, b, c, d, sentinel, eps, distinct):
         # Three irrational real roots.
         theta = R / jnp.sqrt(jnp.where(mask, Q**3, 1.0))
         theta = jnp.arccos(jnp.where(jnp.abs(theta) < 1.0, theta, 0.0))
-        return jnp.moveaxis(
+        return (
             -2
             * jnp.sqrt(Q)
             * jnp.stack(
@@ -1341,9 +1346,7 @@ def _root_cubic(a, b, c, d, sentinel, eps, distinct):
                     jnp.cos((theta - 2 * jnp.pi) / 3),
                 ]
             )
-            - b / 3,
-            source=0,
-            destination=-1,
+            - b / 3
         )
 
     def reducible(Q, R, b):
@@ -1351,7 +1354,7 @@ def _root_cubic(a, b, c, d, sentinel, eps, distinct):
         A = -jnp.sign(R) * jnp.cbrt(jnp.abs(R) + jnp.sqrt(jnp.abs(R**2 - Q**3)))
         B = safediv(Q, A)
         r1 = (A + B) - b / 3
-        return _concat_sentinel(r1[..., jnp.newaxis], sentinel, num=2)
+        return _concat_sentinel(r1[jnp.newaxis], sentinel, num=2)
 
     def root(b, c, d):
         b = safediv(b, a)
@@ -1361,14 +1364,14 @@ def _root_cubic(a, b, c, d, sentinel, eps, distinct):
         R = (2 * b**3 - 9 * b * c) / 54 + 0.5 * d
         mask = R**2 < Q**3
         return jnp.where(
-            mask[..., jnp.newaxis],
+            mask,
             irreducible(jnp.abs(Q), R, b, mask),
             reducible(Q, R, b),
         )
 
     return jnp.where(
         # Tests catch failure here if eps < 1e-12 for 64 bit precision.
-        jnp.expand_dims(jnp.abs(a) <= eps, axis=-1),
+        jnp.abs(a) <= eps,
         _concat_sentinel(
             _root_quadratic(b, c, d, sentinel, eps, distinct),
             sentinel,
@@ -1394,7 +1397,7 @@ def _root_quadratic(a, b, c, sentinel, eps, distinct):
         sentinel,
         safediv(c, q, sentinel),
     )
-    return jnp.stack([r1, r2], axis=-1)
+    return jnp.stack([r1, r2])
 
 
 def _root_linear(a, b, sentinel, eps, distinct=False):
@@ -1404,4 +1407,4 @@ def _root_linear(a, b, sentinel, eps, distinct=False):
 
 def _concat_sentinel(r, sentinel, num=1):
     """Concatenate ``sentinel`` ``num`` times to ``r`` on last axis."""
-    return jnp.append(r, jnp.broadcast_to(sentinel, (*r.shape[:-1], num)), axis=-1)
+    return jnp.concatenate((r, jnp.broadcast_to(sentinel, (num, *r.shape[1:]))))
