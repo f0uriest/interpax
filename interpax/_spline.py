@@ -1360,9 +1360,8 @@ def _root_cubic(a, b, c, d, sentinel, eps, distinct):
     def root(b, c, d):
         b = safediv(b, a)
         c = safediv(c, a)
-        d = safediv(d, a)
         Q = (b**2 - 3 * c) / 9
-        R = (2 * b**3 - 9 * b * c) / 54 + 0.5 * d
+        R = (2 * b**3 - 9 * b * c) / 54 + safediv(0.5 * d, a)
         mask = R**2 < Q**3
         return jnp.where(
             mask,
