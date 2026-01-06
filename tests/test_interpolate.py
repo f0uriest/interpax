@@ -30,42 +30,55 @@ class TestInterp1D:
     )
     def test_interp1d(self, x, dtype):
         """Test accuracy of different 1d interpolation methods."""
-        xp = np.linspace(0, 2 * np.pi, 100)
+        xp = np.real(np.linspace(0, 2 * np.pi, 100).astype(dtype))
         if jnp.iscomplexobj(dtype):
             f = lambda x: jnp.sin(x) + 1j * jnp.sin(x)
         else:
             f = lambda x: jnp.sin(x)
         fp = f(xp)
 
+        if isinstance(x, np.ndarray):
+            x = np.real(x.astype(dtype))
+        fp = fp.astype(dtype)
+
         interp1 = lambda xq, *args, **kwargs: interp1d(xq, *args, **kwargs)
         interp2 = lambda xq, *args, **kwargs: Interpolator1D(*args, **kwargs)(xq)
 
         for interp in [interp1, interp2]:
             fq = interp(x, xp, fp, method="nearest")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-2, atol=1e-1)
 
             fq = interp(x, xp, fp, method="linear")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
 
             fq = interp(x, xp, fp, method="cubic")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="cubic2")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="cardinal")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="catmull-rom")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="monotonic")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
 
             fq = interp(x, xp, fp, method="monotonic-0")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1.5e-2)
 
             fq = interp(x, xp, fp, method="akima")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=2e-5)
 
     @pytest.mark.unit
@@ -152,8 +165,8 @@ class TestInterp2D:
     )
     def test_interp2d(self, x, y, dtype):
         """Test accuracy of different 2d interpolation methods."""
-        xp = np.linspace(0, 3 * np.pi, 99)
-        yp = np.linspace(0, 2 * np.pi, 40)
+        xp = np.real(np.linspace(0, 3 * np.pi, 99).astype(dtype))
+        yp = np.real(np.linspace(0, 2 * np.pi, 40).astype(dtype))
         xxp, yyp = np.meshgrid(xp, yp, indexing="ij")
 
         if jnp.iscomplexobj(dtype):
@@ -162,6 +175,12 @@ class TestInterp2D:
             f = lambda x, y: jnp.sin(x) * jnp.cos(y)
 
         fp = f(xxp, yyp)
+
+        if isinstance(x, np.ndarray):
+            x = np.real(x.astype(dtype))
+        if isinstance(y, np.ndarray):
+            y = np.real(y.astype(dtype))
+        fp = fp.astype(dtype)
 
         interp1 = lambda xq, yq, *args, **kwargs: interp2d(xq, yq, *args, **kwargs)
         interp2 = lambda xq, yq, *args, **kwargs: Interpolator2D(*args, **kwargs)(
@@ -172,36 +191,43 @@ class TestInterp2D:
             fq = interp(
                 x, y, xp, yp, fp, method="nearest", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1)
-
             fq = interp(
                 x, y, xp, yp, fp, method="linear", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=1e-4, atol=1e-2)
             atol = 2e-3
             rtol = 1e-5
             fq = interp(x, y, xp, yp, fp, method="cubic", period=(2 * np.pi, 2 * np.pi))
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
             fq = interp(
                 x, y, xp, yp, fp, method="cubic2", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
             fq = interp(
                 x, y, xp, yp, fp, method="catmull-rom", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
             fq = interp(
                 x, y, xp, yp, fp, method="cardinal", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
             fq = interp(x, y, xp, yp, fp, method="akima", period=(2 * np.pi, 2 * np.pi))
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
             fq = interp(
                 x, y, xp, yp, fp, method="monotonic", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1e-3)
 
     @pytest.mark.unit
@@ -246,9 +272,9 @@ class TestInterp3D:
     )
     def test_interp3d(self, x, y, z, dtype):
         """Test accuracy of different 3d interpolation methods."""
-        xp = np.linspace(0, np.pi, 20)
-        yp = np.linspace(0, 2 * np.pi, 30)
-        zp = np.linspace(0, 3, 25)
+        xp = np.real(np.linspace(0, np.pi, 20).astype(dtype))
+        yp = np.real(np.linspace(0, 2 * np.pi, 30).astype(dtype))
+        zp = np.real(np.linspace(0, 3, 25).astype(dtype))
         xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
 
         if jnp.iscomplexobj(dtype):
@@ -260,6 +286,14 @@ class TestInterp3D:
             f = lambda x, y, z: jnp.sin(x) * jnp.cos(y) * z**2
         fp = f(xxp, yyp, zzp)
 
+        if isinstance(x, np.ndarray):
+            x = np.real(x.astype(dtype))
+        if isinstance(y, np.ndarray):
+            y = np.real(y.astype(dtype))
+        if isinstance(z, np.ndarray):
+            z = np.real(z.astype(dtype))
+        fp = fp.astype(dtype)
+
         interp1 = lambda xq, yq, zq, *args, **kwargs: interp3d(
             xq, yq, zq, *args, **kwargs
         )
@@ -269,26 +303,33 @@ class TestInterp3D:
 
         for interp in [interp1, interp2]:
             fq = interp(x, y, z, xp, yp, zp, fp)
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-5, atol=1e-2)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="nearest")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=1)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="linear")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-3, atol=1e-1)
 
             atol = 5.5e-3
             rtol = 1e-5
             fq = interp(x, y, z, xp, yp, zp, fp, method="cubic")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="cubic2")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="catmull-rom")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="cardinal")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
     @pytest.mark.unit
@@ -335,13 +376,17 @@ def test_fft_interp1d(dtype):
     for p in ["o", "e"]:
         f1[p] = {}
         for i in [1, 2]:
-            f1[p][i] = fun(x[p][i])
+            f1[p][i] = fun(x[p][i]).astype(dtype)
 
     for sp in ["o", "e"]:  # source parity
-        fi = f1[sp][1]
-        fs = fun(x[sp][1] + 0.2)
+        fi = f1[sp][1].astype(dtype)
+        fs = fun(x[sp][1] + 0.2).astype(dtype)
+        f_ = fft_interp1d(fi, *fi.shape, sx=0.2, dx=np.diff(x[sp][1])[0]).squeeze()
         np.testing.assert_allclose(
-            fs, fft_interp1d(fi, *fi.shape, sx=0.2, dx=np.diff(x[sp][1])[0]).squeeze()
+            fs,
+            f_,
+            rtol=float(1e2 * np.finfo(dtype).eps),
+            atol=float(1e2 * np.finfo(dtype).eps),
         )
         for ep in ["o", "e"]:  # eval parity
             for s in ["up", "down"]:  # up or downsample
@@ -351,9 +396,14 @@ def test_fft_interp1d(dtype):
                 else:
                     xs = 2
                     xe = 1
-                true = fun(x[ep][xe])
+                true = fun(x[ep][xe]).astype(dtype)
                 interp = fft_interp1d(f1[sp][xs], x[ep][xe].size)
-                np.testing.assert_allclose(true, interp, atol=1e-12, rtol=1e-12)
+                np.testing.assert_allclose(
+                    true,
+                    interp,
+                    rtol=float(1e2 * np.finfo(dtype).eps),
+                    atol=float(1e2 * np.finfo(dtype).eps),
+                )
 
 
 @pytest.mark.unit
@@ -398,23 +448,27 @@ def test_fft_interp2d(dtype):
             for i in [1, 2]:
                 f2[xp][yp][i] = {}
                 for j in [1, 2]:
-                    f2[xp][yp][i][j] = fun2(x[xp][i], y[yp][j])
+                    f2[xp][yp][i][j] = fun2(x[xp][i], y[yp][j]).astype(dtype)
 
     for spx in ["o", "e"]:  # source parity x
         for spy in ["o", "e"]:  # source parity y
-            fi = f2[spx][spy][1][1]
-            fs = fun2(x[spx][1] + 0.2, y[spy][1] + 0.3)
+            fi = f2[spx][spy][1][1].astype(dtype)
+            fs = fun2(x[spx][1] + 0.2, y[spy][1] + 0.3).astype(dtype)
+            f_ = fft_interp2d(
+                fi,
+                *fi.shape,
+                sx=0.2,
+                sy=0.3,
+                dx=np.diff(x[spx][1])[0],
+                dy=np.diff(y[spy][1])[0]
+            ).squeeze()
             np.testing.assert_allclose(
                 fs,
-                fft_interp2d(
-                    fi,
-                    *fi.shape,
-                    sx=0.2,
-                    sy=0.3,
-                    dx=np.diff(x[spx][1])[0],
-                    dy=np.diff(y[spy][1])[0]
-                ).squeeze(),
+                f_,
+                rtol=float(1e2 * np.finfo(dtype).eps),
+                atol=float(1e2 * np.finfo(dtype).eps),
             )
+            assert f_.dtype == dtype
             for epx in ["o", "e"]:  # eval parity x
                 for epy in ["o", "e"]:  # eval parity y
                     for sx in ["up", "down"]:  # up or downsample x
@@ -431,13 +485,17 @@ def test_fft_interp2d(dtype):
                             else:
                                 ys = 2
                                 ye = 1
-                            true = fun2(x[epx][xe], y[epy][ye])
+                            true = fun2(x[epx][xe], y[epy][ye]).astype(dtype)
                             interp = fft_interp2d(
                                 f2[spx][spy][xs][ys], x[epx][xe].size, y[epy][ye].size
                             )
                             np.testing.assert_allclose(
-                                true, interp, atol=1e-12, rtol=1e-12
+                                true,
+                                interp,
+                                rtol=float(1e2 * np.finfo(dtype).eps),
+                                atol=float(1e2 * np.finfo(dtype).eps),
                             )
+                            assert interp.dtype == dtype
 
 
 class TestAD:

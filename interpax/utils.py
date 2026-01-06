@@ -42,6 +42,8 @@ def warnif(
 def asarray_inexact(x: Num[Arrayish, "..."]) -> Inexact[Array, "..."]:
     """Convert to jax array with floating point dtype."""
     x = jnp.asarray(x)
+    if x.weak_type:  # preserve weakly typed things like scalars
+        return x
     dtype = x.dtype
     if not jnp.issubdtype(dtype, jnp.inexact):
         dtype = jnp.result_type(x, jnp.array(1.0))
