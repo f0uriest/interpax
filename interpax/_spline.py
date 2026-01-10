@@ -1361,7 +1361,7 @@ def _root_cubic(a, b, c, d, sentinel, eps, distinct):
         b = safediv(b, a)
         c = safediv(c, a)
         Q = (b**2 - 3 * c) / 9
-        R = (2 * b**3 - 9 * b * c) / 54 + safediv(0.5 * d, a)
+        R = (2 * b**3 - 9 * b * c) / 54 + safediv(d, 2 * a)
         mask = R**2 < Q**3
         return jnp.where(
             mask,
@@ -1370,7 +1370,7 @@ def _root_cubic(a, b, c, d, sentinel, eps, distinct):
         )
 
     return jnp.where(
-        # Tests catch failure here if eps < 1e-12 for 64 bit precision.
+        # Tests catch failure here if eps < 1e-12 for double precision.
         jnp.abs(a) <= eps,
         _concat_sentinel(
             _root_quadratic(b, c, d, sentinel, eps, distinct),
