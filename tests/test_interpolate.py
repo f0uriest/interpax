@@ -16,6 +16,7 @@ from interpax import (
     interp2d,
     interp3d,
 )
+from interpax._spline import _polyroot_vec
 
 jax_config.update("jax_enable_x64", True)
 
@@ -412,7 +413,7 @@ def test_fft_interp2d(dtype):
                     sx=0.2,
                     sy=0.3,
                     dx=np.diff(x[spx][1])[0],
-                    dy=np.diff(y[spy][1])[0]
+                    dy=np.diff(y[spy][1])[0],
                 ).squeeze(),
             )
             for epx in ["o", "e"]:  # eval parity x
@@ -576,3 +577,61 @@ def test_extrap_float():
     np.testing.assert_allclose(interpol(4.5, 5.3), 1.0)
     np.testing.assert_allclose(interpol(-4.5, 5.3), 0.0)
     np.testing.assert_allclose(interpol(4.5, -5.3), 0.0)
+
+
+def test_polyroot_vec(eps=max(jnp.finfo(jnp.array(1.0).dtype).eps, 2.5e-12)):
+    """Test vectorized computation of cubic polynomial exact roots."""
+    c = np.arange(-24, 24).reshape(4, 6, -1).transpose(-1, 1, 0)
+    # Ensure broadcasting won't hide error in implementation.
+    assert np.unique(c.shape).size == c.ndim
+
+    k = np.broadcast_to(np.arange(c.shape[-2]), c.shape[:-1])
+    # Now increase dimension so that shapes still broadcast, but stuff like
+    # c[...,-1]-=k is not allowed because it grows the dimension of c.
+    # This is needed functionality in polyroot_vec that requires an awkward
+    # loop to obtain if using jnp.vectorize.
+    k = np.stack([k, k * 2 + 1])
+    r = _polyroot_vec(c, k, sort=True, eps=eps)
+
+    for i in range(k.shape[0]):
+        d = c.copy()
+        d[..., -1] -= k[i]
+        # np.roots cannot be vectorized because it strips leading zeros and
+        # output shape is therefore dynamic.
+        for idx in np.ndindex(d.shape[:-1]):
+            np.testing.assert_allclose(
+                r[(i, *idx)],
+                np.sort(np.roots(d[idx])),
+                err_msg=f"Eigenvalue branch of polyroot_vec failed at {i, *idx}.",
+            )
+
+    # Now test analytic formula branch, Ensure it filters distinct roots,
+    # and ensure zero coefficients don't bust computation due to singularities
+    # in analytic formulae which are not present in iterative eigenvalue scheme.
+    c = np.array(
+        [
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+            [1, -1, -8, 12],
+            [1, -6, 11, -6],
+            [0, -6, 11, -2],
+        ]
+    )
+    r = _polyroot_vec(c, sort=True, distinct=True, eps=eps)
+    for j in range(c.shape[0]):
+        root = r[j][~np.isnan(r[j])]
+        unique_root = np.unique(np.roots(c[j]))
+        assert root.size == unique_root.size
+        np.testing.assert_allclose(
+            root,
+            unique_root,
+            err_msg=f"Analytic branch of polyroot_vec failed at {j}.",
+        )
+    c = np.array([0, 1, -1, -8, 12])
+    r = _polyroot_vec(c, sort=True, distinct=True, eps=eps)
+    r = r[~np.isnan(r)]
+    unique_r = np.unique(np.roots(c))
+    assert r.size == unique_r.size
+    np.testing.assert_allclose(r, unique_r)
