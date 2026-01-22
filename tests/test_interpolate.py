@@ -10,11 +10,13 @@ from interpax import (
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
+    InterpolatorNd,
     fft_interp1d,
     fft_interp2d,
     interp1d,
     interp2d,
     interp3d,
+    interpNd,
 )
 
 jax_config.update("jax_enable_x64", True)
@@ -576,3 +578,164 @@ def test_extrap_float():
     np.testing.assert_allclose(interpol(4.5, 5.3), 1.0)
     np.testing.assert_allclose(interpol(-4.5, 5.3), 0.0)
     np.testing.assert_allclose(interpol(4.5, -5.3), 0.0)
+
+
+class TestInterpNd:
+    """Tests for N-dimensional interpolation."""
+
+    @pytest.mark.unit
+    def test_interpNd_linear_3d(self):
+        """Test 3D multilinear interpolation accuracy."""
+        x = (
+            jnp.linspace(0, 1, 10),
+            jnp.linspace(0, 1, 12),
+            jnp.linspace(0, 1, 8),
+        )
+        grid = jnp.meshgrid(*x, indexing="ij")
+        f = jnp.sin(2 * np.pi * grid[0]) * jnp.cos(2 * np.pi * grid[1]) * grid[2]
+
+        xq = (jnp.array([0.0, 0.5, 1.0]), jnp.array([0.0, 0.5, 1.0]), jnp.array([0.5, 0.5, 0.5])) 
+        fq = interpNd(xq, x, f, method="linear")
+
+        expected = jnp.sin(2 * np.pi * xq[0]) * jnp.cos(2 * np.pi * xq[1]) * xq[2]
+        np.testing.assert_allclose(fq, expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.unit
+    def test_interpNd_linear_4d(self):
+        """Test 4D multilinear interpolation."""
+        x = tuple(jnp.linspace(0, 1, 5) for _ in range(4))
+        grid = jnp.meshgrid(*x, indexing="ij")
+        
+        f = grid[0] + 2 * grid[1] + 3 * grid[2] + 4 * grid[3]
+
+        xq = tuple(jnp.array([0.25, 0.75]) for _ in range(4))
+        fq = interpNd(xq, x, f, method="linear")
+
+        expected = xq[0] + 2 * xq[1] + 3 * xq[2] + 4 * xq[3]
+        np.testing.assert_allclose(fq, expected, rtol=1e-10, atol=1e-10)
+
+    @pytest.mark.unit
+    def test_interpNd_nearest(self):
+        """Test nearest neighbor interpolation."""
+        x = (jnp.array([0.0, 1.0, 2.0]), jnp.array([0.0, 1.0, 2.0]))
+        f = jnp.arange(9).reshape(3, 3).astype(float)
+
+        xq = (jnp.array([0.1, 1.9]), jnp.array([0.1, 1.9]))
+        fq = interpNd(xq, x, f, method="nearest")
+
+        np.testing.assert_allclose(fq[0], f[0, 0])  # closest to (0,0)
+        np.testing.assert_allclose(fq[1], f[2, 2])  # closest to (2,2)
+
+    @pytest.mark.unit
+    def test_interpNd_class(self):
+        """Test InterpolatorNd class matches functional API."""
+        x = (jnp.linspace(0, 1, 10), jnp.linspace(0, 1, 10), jnp.linspace(0, 1, 10))
+        grid = jnp.meshgrid(*x, indexing="ij")
+        f = grid[0] * grid[1] * grid[2]
+
+        xq = (jnp.array([0.3, 0.7]), jnp.array([0.4, 0.6]), jnp.array([0.5, 0.5]))
+
+        fq_func = interpNd(xq, x, f, method="linear")
+        interp = InterpolatorNd(x, f, method="linear")
+        fq_class = interp(*xq)
+
+        np.testing.assert_allclose(fq_func, fq_class, rtol=1e-12, atol=1e-12)
+
+    @pytest.mark.unit
+    def test_interpNd_extrap(self):
+        """Test extrapolation behavior."""
+        x = (jnp.linspace(0, 1, 5), jnp.linspace(0, 1, 5))
+        f = jnp.ones((5, 5))
+
+        xq = (jnp.array([-0.5, 0.5, 1.5]), jnp.array([0.5, 0.5, 0.5]))
+
+        fq = interpNd(xq, x, f, method="linear", extrap=False)
+        assert jnp.isnan(fq[0])
+        np.testing.assert_allclose(fq[1], 1.0)
+        assert jnp.isnan(fq[2])
+
+        fq = interpNd(xq, x, f, method="linear", extrap=True)
+        np.testing.assert_allclose(fq, jnp.array([1.0, 1.0, 1.0]), rtol=1e-10)
+
+        fq = interpNd(xq, x, f, method="linear", extrap=0.0)
+        np.testing.assert_allclose(fq, jnp.array([0.0, 1.0, 0.0]), rtol=1e-10)
+
+    @pytest.mark.unit
+    def test_interpNd_jit(self):
+        """Test that interpNd works with jax.jit."""
+        x = tuple(jnp.linspace(0, 1, 5) for _ in range(3))
+        f = jnp.ones((5, 5, 5))
+
+        @jax.jit
+        def interp_fn(xq):
+            return interpNd(xq, x, f, method="linear")
+
+        xq = (jnp.array([0.5]), jnp.array([0.5]), jnp.array([0.5]))
+        result = interp_fn(xq)
+        np.testing.assert_allclose(result, jnp.array([1.0]))
+
+    @pytest.mark.unit
+    def test_interpNd_grad(self):
+        """Test that gradients work for interpNd."""
+        x = tuple(jnp.linspace(0, 1, 5) for _ in range(2))
+        grid = jnp.meshgrid(*x, indexing="ij")
+        f = grid[0] ** 2 + grid[1] ** 2
+
+        xq = (jnp.array([0.5]), jnp.array([0.5]))
+
+        def loss(f_in):
+            return interpNd(xq, x, f_in, method="linear").sum()
+
+        grad_f = jax.grad(loss)(f)
+
+        assert grad_f.shape == f.shape
+        assert jnp.any(grad_f != 0)
+
+        eps = 1e-5
+        i, j = 2, 2
+        f_perturb = f.at[i, j].add(eps)
+        fd = (loss(f_perturb) - loss(f)) / eps
+        np.testing.assert_allclose(grad_f[i, j], fd, rtol=1e-3)
+
+    @pytest.mark.unit
+    def test_interpNd_matches_interp2d_linear(self):
+        """Test that interpNd matches interp2d for 2D linear interpolation."""
+        x = jnp.linspace(0, 1, 10)
+        y = jnp.linspace(0, 1, 12)
+        grid = jnp.meshgrid(x, y, indexing="ij")
+        f = jnp.sin(grid[0]) * jnp.cos(grid[1])
+
+        xq = jnp.linspace(0.1, 0.9, 5)
+        yq = jnp.linspace(0.1, 0.9, 5)
+
+        fq_2d = interp2d(xq, yq, x, y, f, method="linear")
+        fq_nd = interpNd((xq, yq), (x, y), f, method="linear")
+
+        np.testing.assert_allclose(fq_2d, fq_nd, rtol=1e-10, atol=1e-10)
+
+    @pytest.mark.unit
+    def test_interpNd_matches_interp3d_linear(self):
+        """Test that interpNd matches interp3d for 3D linear interpolation."""
+        x = jnp.linspace(0, 1, 8)
+        y = jnp.linspace(0, 1, 10)
+        z = jnp.linspace(0, 1, 6)
+        grid = jnp.meshgrid(x, y, z, indexing="ij")
+        f = grid[0] * grid[1] * grid[2]
+
+        xq = jnp.linspace(0.1, 0.9, 3)
+        yq = jnp.linspace(0.1, 0.9, 3)
+        zq = jnp.linspace(0.1, 0.9, 3)
+
+        fq_3d = interp3d(xq, yq, zq, x, y, z, f, method="linear")
+        fq_nd = interpNd((xq, yq, zq), (x, y, z), f, method="linear")
+
+        np.testing.assert_allclose(fq_3d, fq_nd, rtol=1e-10, atol=1e-10)
+
+    @pytest.mark.unit
+    def test_interpNd_invalid_method(self):
+        """Test that interpNd raises error for unsupported method."""
+        x = (jnp.linspace(0, 1, 5), jnp.linspace(0, 1, 5))
+        f = jnp.ones((5, 5))
+        xq = (jnp.array([0.5]), jnp.array([0.5]))
+        with pytest.raises(ValueError):
+            interpNd(xq, x, f, method="cubic")
