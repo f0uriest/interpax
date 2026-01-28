@@ -6,7 +6,7 @@ scipy >= 1.10.0, <= 1.15.3
 # building the docs
 sphinx >= 3.0.0, <= 8.2.3
 sphinx_copybutton <= 0.5.2
-sphinx-rtd-theme >= 1.0, < 3.0.3
+sphinx-rtd-theme >= 1.0, < 3.1.1
 sphinx-github-style >= 1.0, <= 1.2.2
 
 # linting
