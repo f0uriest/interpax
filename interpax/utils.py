@@ -61,3 +61,22 @@ def wrap_jit(*args, **kwargs):
         return foo
 
     return wrapper
+
+
+def safediv(a, b, fill=0.0, threshold=0.0):
+    """Divide a/b with guards for division by zero.
+
+    Parameters
+    ----------
+    a, b : ndarray
+        Numerator and denominator.
+    fill : float, ndarray, optional
+        Value to return where b is zero.
+    threshold : float >= 0
+        How small is b allowed to be.
+
+    """
+    mask = jnp.abs(b) <= threshold
+    num = jnp.where(mask, fill, a)
+    den = jnp.where(mask, 1.0, b)
+    return num / den
