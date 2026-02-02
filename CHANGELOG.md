@@ -1,6 +1,12 @@
 Changelog
 =========
 
+- Adds ``"even_spacing"`` option to ``interpXd`` and ``InterpolatorXD``. If the user
+sets this to True, the neighboring indices will be computed without a binary search.
+
+
+v0.3.0
+------
 - Adds a number of classes that replicate most of the functionality of the
 corresponding classes from scipy.interpolate :
   - ``scipy.interpolate.PPoly`` -> ``interpax.PPoly``
