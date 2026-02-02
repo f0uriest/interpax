@@ -15,9 +15,11 @@ from ._spline import (
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
+    InterpolatorNd,
     interp1d,
     interp2d,
     interp3d,
+    interpNd,
 )
 
 __all__ = [
@@ -33,9 +35,11 @@ __all__ = [
     "Interpolator1D",
     "Interpolator2D",
     "Interpolator3D",
+    "InterpolatorNd",
     "interp1d",
     "interp2d",
     "interp3d",
+    "interpNd",
 ]
 
 __version__ = _version.get_versions()["version"]
