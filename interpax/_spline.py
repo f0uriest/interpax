@@ -501,6 +501,9 @@ def interp1d(
 
     """
     xq, x, f = map(asarray_inexact, (xq, x, f))
+    xtype = jnp.result_type(x, xq)
+    x, xq = map(lambda a: a.astype(xtype), (x, xq))
+    f = f.astype(jnp.result_type(f, x))
     axis = kwargs.get("axis", 0)
     fx = kwargs.pop("fx", None)
     outshape = xq.shape + f.shape[1:]
@@ -658,6 +661,10 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     """
     xq, yq, x, y, f = map(asarray_inexact, (xq, yq, x, y, f))
+    xtype = jnp.result_type(x, y, xq, yq)
+    x, y, xq, yq = map(lambda a: a.astype(xtype), (x, y, xq, yq))
+    f = f.astype(jnp.result_type(f, x))
+
     fx = kwargs.pop("fx", None)
     fy = kwargs.pop("fy", None)
     fxy = kwargs.pop("fxy", None)
@@ -737,10 +744,10 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
         dx0 = lambda: jnp.array([x1 - xq, xq - x0])
         dx1 = lambda: jnp.array([-jnp.ones_like(xq), jnp.ones_like(xq)])
-        dx2 = lambda: jnp.zeros((2, xq.size))
+        dx2 = lambda: jnp.zeros((2, xq.size), dtype=xtype)
         dy0 = lambda: jnp.array([y1 - yq, yq - y0])
         dy1 = lambda: jnp.array([-jnp.ones_like(yq), jnp.ones_like(yq)])
-        dy2 = lambda: jnp.zeros((2, yq.size))
+        dy2 = lambda: jnp.zeros((2, yq.size), dtype=xtype)
 
         tx = jax.lax.switch(derivative_x, [dx0, dx1, dx2])
         ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
@@ -873,6 +880,10 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     """
     xq, yq, zq, x, y, z, f = map(asarray_inexact, (xq, yq, zq, x, y, z, f))
+    xtype = jnp.result_type(x, y, z, xq, yq, zq)
+    x, y, z, xq, yq, zq = map(lambda a: a.astype(xtype), (x, y, z, xq, yq, zq))
+    f = f.astype(jnp.result_type(f, x))
+
     errorif(
         (len(x) != f.shape[0]) or (x.ndim != 1),
         ValueError,
@@ -996,13 +1007,13 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
         dx0 = lambda: jnp.array([x1 - xq, xq - x0])
         dx1 = lambda: jnp.array([-jnp.ones_like(xq), jnp.ones_like(xq)])
-        dx2 = lambda: jnp.zeros((2, xq.size))
+        dx2 = lambda: jnp.zeros((2, xq.size), dtype=xtype)
         dy0 = lambda: jnp.array([y1 - yq, yq - y0])
         dy1 = lambda: jnp.array([-jnp.ones_like(yq), jnp.ones_like(yq)])
-        dy2 = lambda: jnp.zeros((2, yq.size))
+        dy2 = lambda: jnp.zeros((2, yq.size), dtype=xtype)
         dz0 = lambda: jnp.array([z1 - zq, zq - z0])
         dz1 = lambda: jnp.array([-jnp.ones_like(zq), jnp.ones_like(zq)])
-        dz2 = lambda: jnp.zeros((2, zq.size))
+        dz2 = lambda: jnp.zeros((2, zq.size), dtype=xtype)
 
         tx = jax.lax.switch(derivative_x, [dx0, dx1, dx2])
         ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
