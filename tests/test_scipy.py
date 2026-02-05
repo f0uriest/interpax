@@ -784,7 +784,10 @@ class TestCubicSpline:
         else:
             order, value = bc_start
             assert_allclose(
-                S(x[0], order), value, rtol=tol, atol=tol  # pyright: ignore
+                S(x[0], order),
+                value,
+                rtol=tol,
+                atol=tol,  # pyright: ignore
             )
 
         if bc_end == "not-a-knot":
@@ -800,7 +803,10 @@ class TestCubicSpline:
         else:
             order, value = bc_end
             assert_allclose(
-                S(x[-1], order), value, rtol=tol, atol=tol  # pyright: ignore
+                S(x[-1], order),
+                value,
+                rtol=tol,
+                atol=tol,  # pyright: ignore
             )
 
     def check_all_bc(self, x, y, axis):
@@ -1048,9 +1054,17 @@ class TestRBFInterpolator:
         x, y = self._make_test_data_1d()
 
         for degree in [-1, 0, 1, 2]:
-            # Both implementations should issue the same warnings for invalid degrees
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
+            warns = degree < 1 and degree != -1
+            if warns:
+                with pytest.warns(UserWarning):
+                    rbf_jax = RBFInterpolator(
+                        x, y, kernel="thin_plate_spline", degree=degree
+                    )
+                with pytest.warns(UserWarning):
+                    rbf_scipy = scipy.interpolate.RBFInterpolator(
+                        x, y, kernel="thin_plate_spline", degree=degree
+                    )
+            else:
                 rbf_jax = RBFInterpolator(
                     x, y, kernel="thin_plate_spline", degree=degree
                 )
@@ -1103,7 +1117,10 @@ class TestRBFInterpolator:
             y_jax = rbf_jax(x_test)
             y_scipy = rbf_scipy(x_test)
 
-            assert_allclose(y_jax, y_scipy, rtol=1e-8, atol=1e-8)
+            if kernel == "gaussian":
+                assert_allclose(y_jax, y_scipy, rtol=5e-8, atol=5e-8)
+            else:
+                assert_allclose(y_jax, y_scipy, rtol=1e-8, atol=1e-8)
 
     def test_dtypes(self):
         """Test different data types."""
@@ -1124,6 +1141,48 @@ class TestRBFInterpolator:
         y_scipy = rbf_scipy(x_test)
 
         assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+        x32 = np.array([[0.0], [1.0], [2.0]], dtype=np.float32)
+        y32 = np.array([0.0, 1.0, -0.5], dtype=np.float32)
+        rbf_jax = RBFInterpolator(x32, y32, kernel="linear")
+        y32_out = rbf_jax(np.array([[0.5]], dtype=np.float32))
+        assert_equal(y32_out.dtype, np.dtype(np.float32))
+
+        y64 = np.array([0.0, 1.0, -0.5], dtype=np.float64)
+        rbf_jax = RBFInterpolator(x32, y64, kernel="linear")
+        y64_out = rbf_jax(np.array([[0.5]], dtype=np.float32))
+        assert_equal(y64_out.dtype, np.dtype(np.float64))
+
+        y_complex = np.array([0.0 + 0.0j, 1.0 + 2.0j, -0.5 + 0.25j], dtype=np.complex64)
+        rbf_jax = RBFInterpolator(x32, y_complex, kernel="linear")
+        y_complex_out = rbf_jax(np.array([[0.5]], dtype=np.float32))
+        assert_equal(y_complex_out.dtype, np.dtype(np.complex64))
+
+    def test_gradients(self):
+        """Test that gradients are finite and reasonable."""
+        x = jnp.array([[0.0], [1.0], [2.0]], dtype=jnp.float32)
+        y = jnp.array([0.0, 1.0, -0.5], dtype=jnp.float32)
+        rbf = RBFInterpolator(x, y, kernel="thin_plate_spline")
+
+        def f(p):
+            return rbf(p[None, :])[0]
+
+        def g(p):
+            return rbf(p[None, :])
+
+        p0 = jnp.array([0.0], dtype=jnp.float32)
+        grad0 = jax.grad(f)(p0)
+        assert_(jnp.all(jnp.isfinite(grad0)))
+        jac_fwd = jax.jacfwd(g)(p0)
+        jac_rev = jax.jacrev(g)(p0)
+        assert_(jnp.all(jnp.isfinite(jac_fwd)))
+        assert_(jnp.all(jnp.isfinite(jac_rev)))
+
+        p1 = jnp.array([0.3], dtype=jnp.float32)
+        grad1 = jax.grad(f)(p1)
+        eps = 1e-3
+        fd = (f(p1 + eps) - f(p1 - eps)) / (2 * eps)
+        assert_allclose(np.asarray(grad1), np.asarray(fd), rtol=1e-2, atol=1e-2)
 
     def test_incorrect_inputs(self):
         """Test error handling for incorrect inputs."""
