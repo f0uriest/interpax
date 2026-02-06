@@ -31,6 +31,7 @@ except where noted in the documentation.
     interpax.CubicSpline
     interpax.PchipInterpolator
     interpax.PPoly
+    interpax.RBFInterpolator
 
 
 Functional interface for 1D, 2D, 3D interpolation
