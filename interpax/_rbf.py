@@ -361,9 +361,6 @@ class RBFInterpolator(eqx.Module):
         "quintic",
         "thin_plate_spline",
     ] = eqx.field(static=True)
-    kernel_func: Callable[[Float[Array, "..."]], Float[Array, "..."]] = eqx.field(
-        static=True
-    )
     epsilon: float
     powers: Int[Array, " R N"]
     _shift: Optional[Float[Array, " N"]]
@@ -499,7 +496,6 @@ class RBFInterpolator(eqx.Module):
         self.neighbors = neighbors
         self.smoothing = smoothing
         self.kernel = kernel
-        self.kernel_func = kernel_func
         self.epsilon = epsilon
         self.powers = powers
 
@@ -542,6 +538,8 @@ class RBFInterpolator(eqx.Module):
             nnei = len(y)
         else:
             nnei = self.neighbors
+            
+        kernel_func = _get_kernel(self.kernel)
 
         # in each chunk we consume the same space we already occupy
         chunksize = memory_budget // (self.powers.shape[0] + nnei) + 1
@@ -560,7 +558,7 @@ class RBFInterpolator(eqx.Module):
                 vec = _build_evaluation_coefficients(
                     x_chunk,
                     y,
-                    self.kernel_func,
+                    kernel_func,
                     self.epsilon,
                     self.powers,
                     shift,
@@ -572,7 +570,7 @@ class RBFInterpolator(eqx.Module):
             out = out_chunks.reshape((-1, self.d.shape[1]))[:nx]
         else:
             vec = _build_evaluation_coefficients(
-                x, y, self.kernel_func, self.epsilon, self.powers, shift, scale
+                x, y, kernel_func, self.epsilon, self.powers, shift, scale
             )
             out = jnp.dot(vec, coeffs)
 
@@ -640,8 +638,9 @@ class RBFInterpolator(eqx.Module):
                 snbr = self.smoothing[neighbors_i]
 
                 # Build and solve the local system
+                kernel_func = _get_kernel(self.kernel)
                 lhs, rhs, shift, scale = _build_system(
-                    ynbr, dnbr, snbr, self.kernel_func, self.epsilon, self.powers
+                    ynbr, dnbr, snbr, kernel_func, self.epsilon, self.powers
                 )
                 coeffs = solve(lhs, rhs)
 
@@ -650,7 +649,7 @@ class RBFInterpolator(eqx.Module):
                 vec = _build_evaluation_coefficients(
                     xnbr,
                     ynbr,
-                    self.kernel_func,
+                    kernel_func,
                     self.epsilon,
                     self.powers,
                     shift,
