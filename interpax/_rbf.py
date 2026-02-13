@@ -5,6 +5,7 @@ import warnings
 from itertools import combinations_with_replacement
 from typing import Any, Callable, Optional, Union, cast
 
+import numpy as np
 import equinox as eqx
 import jax
 import jax.lax
@@ -62,16 +63,15 @@ def _monomial_powers(ndim: int, degree: int) -> Int[Array, " nmonos ndim"]:
     """
     with jax.ensure_compile_time_eval():
         nmonos = math.comb(degree + ndim, ndim)
-    out = jnp.zeros((nmonos, ndim), dtype=jnp.int32)
-    count = 0
-    for deg in range(degree + 1):
-        for mono in combinations_with_replacement(range(ndim), deg):
-            # `mono` is a tuple of variables in the current monomial with
-            # multiplicity indicating power (e.g., (0, 1, 1) represents x*y**2)
-            for var in mono:
-                out = out.at[count, var].add(1)
-            count += 1
-
+        out = np.zeros((nmonos, ndim), dtype=np.int32)
+        count = 0
+        for deg in range(degree + 1):
+            for mono in combinations_with_replacement(range(ndim), deg):
+                # `mono` is a tuple of variables in the current monomial with
+                # multiplicity indicating power (e.g., (0, 1, 1) represents x*y**2)
+                for var in mono:
+                    out[count, var] += 1
+                count += 1
     return out
 
 
