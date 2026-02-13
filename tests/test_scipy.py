@@ -1160,6 +1160,9 @@ class TestRBFInterpolator:
 
     def test_gradients(self):
         """Test that gradients are finite and reasonable."""
+        import jax
+        import jax.numpy as jnp
+
         x = jnp.array([[0.0], [1.0], [2.0]], dtype=jnp.float32)
         y = jnp.array([0.0, 1.0, -0.5], dtype=jnp.float32)
         rbf = RBFInterpolator(x, y, kernel="thin_plate_spline")
