@@ -538,41 +538,25 @@ class RBFInterpolator(eqx.Module):
             nnei = len(y)
         else:
             nnei = self.neighbors
-            
+
         kernel_func = _get_kernel(self.kernel)
 
         # in each chunk we consume the same space we already occupy
         chunksize = memory_budget // (self.powers.shape[0] + nnei) + 1
 
-        if chunksize <= nx:
-            pad = (-nx) % chunksize
-            if pad:
-                x_pad = jnp.pad(x, ((0, pad), (0, 0)), mode="edge")
-            else:
-                x_pad = x
-
-            num_chunks = x_pad.shape[0] // chunksize
-            x_chunks = x_pad.reshape((num_chunks, chunksize, ndim))
-
-            def process_chunk(x_chunk):
-                vec = _build_evaluation_coefficients(
-                    x_chunk,
-                    y,
-                    kernel_func,
-                    self.epsilon,
-                    self.powers,
-                    shift,
-                    scale,
-                )
-                return jnp.dot(vec, coeffs)
-
-            out_chunks = jax.lax.map(process_chunk, x_chunks)
-            out = out_chunks.reshape((-1, self.d.shape[1]))[:nx]
-        else:
+        def process_chunk(x_chunk):
             vec = _build_evaluation_coefficients(
-                x, y, kernel_func, self.epsilon, self.powers, shift, scale
+                x_chunk,
+                y,
+                kernel_func,
+                self.epsilon,
+                self.powers,
+                shift,
+                scale,
             )
-            out = jnp.dot(vec, coeffs)
+            return jnp.dot(vec, coeffs)
+
+        out = jax.lax.map(process_chunk, x[None, :], batch_size=chunksize)
 
         return out
 
@@ -631,7 +615,8 @@ class RBFInterpolator(eqx.Module):
 
             # Process each evaluation point individually
             # This is simpler but less optimized than the scipy version
-            def process_single_point(xi, neighbors_i):
+            def process_single_point(xi_and_neighbors):
+                xi, neighbors_i = xi_and_neighbors
                 # Extract the neighborhood data
                 ynbr = self.y[neighbors_i]
                 dnbr = self.d[neighbors_i]
@@ -661,29 +646,9 @@ class RBFInterpolator(eqx.Module):
 
             # Process points in chunks to stay within memory budget
             chunk_size = max(1, int(memory_budget / (self.neighbors * self.d.shape[1])))
-            if chunk_size < nx:
-                pad = (-nx) % chunk_size
-                if pad:
-                    x_pad = jnp.pad(x, ((0, pad), (0, 0)), mode="edge")
-                    neighbors_pad = jnp.pad(neighbors, ((0, pad), (0, 0)), mode="edge")
-                else:
-                    x_pad = x
-                    neighbors_pad = neighbors
-
-                num_chunks = x_pad.shape[0] // chunk_size
-                x_chunks = x_pad.reshape((num_chunks, chunk_size, ndim))
-                neighbors_chunks = neighbors_pad.reshape(
-                    (num_chunks, chunk_size, self.neighbors)
-                )
-
-                def process_chunk(chunk_data):
-                    x_chunk, neighbors_chunk = chunk_data
-                    return jax.vmap(process_single_point)(x_chunk, neighbors_chunk)
-
-                out_chunks = jax.lax.map(process_chunk, (x_chunks, neighbors_chunks))
-                out = out_chunks.reshape((-1, self.d.shape[1]))[:nx]
-            else:
-                out = jax.vmap(process_single_point)(x, neighbors)
+            out = jax.lax.map(
+                process_single_point, (x, neighbors), batch_size=chunk_size
+            )
 
         if jnp.issubdtype(self.d_dtype, jnp.complexfloating):
             out = out.astype(self.d.dtype).view(self.d_dtype)
