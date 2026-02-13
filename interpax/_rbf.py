@@ -75,27 +75,6 @@ def _monomial_powers(ndim: int, degree: int) -> Int[Array, " nmonos ndim"]:
     return out
 
 
-def _rbf_kernel_direct(
-    r2: Float[Array, "..."],
-    kernel_func: Callable[[Float[Array, "..."]], Float[Array, "..."]],
-) -> Float[Array, "..."]:
-    """Evaluate the RBF kernel function with pre-scaled squared distances.
-
-    Parameters
-    ----------
-    r2 : ndarray
-        Squared distance between points (already scaled by epsilon)
-    kernel_func : callable
-        RBF kernel function for squared distances
-
-    Returns
-    -------
-    ndarray
-        Value of the RBF kernel
-    """
-    return kernel_func(r2)
-
-
 def _build_system(
     y: Float[Array, " P N"],
     d: Shaped[Array, " P *d_shape"],
@@ -156,7 +135,7 @@ def _build_system(
 
     # Build the RBF matrix - use epsilon-scaled coordinates directly
     r2 = jnp.sum((yeps[:, None, :] - yeps[None, :, :]) ** 2, axis=2)
-    K = _rbf_kernel_direct(r2, kernel_func)
+    K = kernel_func(r2)
 
     # Add smoothing to diagonal
     K = K + jnp.diag(smoothing)
@@ -219,7 +198,7 @@ def _build_evaluation_coefficients(
 
     # Build the RBF matrix using epsilon-scaled coordinates
     r2 = jnp.sum((xeps[:, None, :] - yeps[None, :, :]) ** 2, axis=2)
-    K = _rbf_kernel_direct(r2, kernel_func)
+    K = kernel_func(r2)
 
     # Build the polynomial matrix using transformed coordinates
     if R > 0:
