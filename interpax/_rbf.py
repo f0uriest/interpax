@@ -433,7 +433,7 @@ class RBFInterpolator(eqx.Module):
                     f"{_SCALE_INVARIANT}."
                 )
         else:
-            epsilon = float(asarray_inexact(epsilon))
+            epsilon = asarray_inexact(epsilon)
 
         min_degree = _NAME_TO_MIN_DEGREE.get(kernel, -1)
         if degree is None:
