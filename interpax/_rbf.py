@@ -12,7 +12,7 @@ import jax.lax
 import jax.numpy as jnp
 import jaxkd as jk
 from jax.scipy.linalg import solve
-from jaxtyping import Array, Float, Int, Shaped
+from jaxtyping import Array, ArrayLike, Float, Int, Shaped
 from typing_extensions import Literal
 
 from .utils import asarray_inexact
@@ -72,7 +72,7 @@ def _monomial_powers(ndim: int, degree: int) -> Int[Array, " nmonos ndim"]:
                 for var in mono:
                     out[count, var] += 1
                 count += 1
-    return out
+    return jnp.asarray(out)
 
 
 @eqx.filter_jit
@@ -81,7 +81,7 @@ def _build_system(
     d: Shaped[Array, " P *d_shape"],
     smoothing: Float[Array, " P"],
     kernel_func: Callable[[Float[Array, "..."]], Float[Array, "..."]],
-    epsilon: float,
+    epsilon: Float[Array, ""],
     powers: Int[Array, " R N"],
 ) -> tuple[
     Float[Array, " P+R P+R"],
@@ -160,7 +160,7 @@ def _build_evaluation_coefficients(
     x: Float[Array, " Q N"],
     y: Float[Array, " P N"],
     kernel_func: Callable[[Float[Array, "..."]], Float[Array, "..."]],
-    epsilon: float,
+    epsilon: Float[Array, ""],
     powers: Int[Array, " R N"],
     shift: Float[Array, " N"],
     scale: Float[Array, " N"],
@@ -342,7 +342,7 @@ class RBFInterpolator(eqx.Module):
         "quintic",
         "thin_plate_spline",
     ] = eqx.field(static=True)
-    epsilon: float
+    epsilon: Float[Array, ""]
     powers: Int[Array, " R N"]
     _shift: Optional[Float[Array, " N"]]
     _scale: Optional[Float[Array, " N"]]
@@ -351,12 +351,12 @@ class RBFInterpolator(eqx.Module):
 
     def __init__(
         self,
-        y: Float[Array, " P N"],
-        d: Shaped[Array, " P *d_shape"],
+        y: Float[ArrayLike, " P N"],
+        d: Shaped[ArrayLike, " P *d_shape"],
         neighbors: Optional[int] = None,
-        smoothing: Union[float, Float[Array, " P"]] = 0.0,
+        smoothing: Union[float, Float[ArrayLike, " P"]] = 0.0,
         kernel: str = "thin_plate_spline",
-        epsilon: Optional[float] = None,
+        epsilon: Optional[Union[float, Float[Array, ""]]] = None,
         degree: Optional[int] = None,
     ):
         y = asarray_inexact(y)
@@ -407,7 +407,7 @@ class RBFInterpolator(eqx.Module):
 
         if epsilon is None:
             if kernel in _SCALE_INVARIANT:
-                epsilon = 1.0
+                epsilon = jnp.asarray(1.0, dtype=y.dtype)
             else:
                 raise ValueError(
                     "`epsilon` must be specified if `kernel` is not one of "
@@ -415,6 +415,8 @@ class RBFInterpolator(eqx.Module):
                 )
         else:
             epsilon = asarray_inexact(epsilon)
+            if epsilon.ndim != 0:
+                raise ValueError("`epsilon` must be a scalar.")
 
         min_degree = _NAME_TO_MIN_DEGREE.get(kernel, -1)
         if degree is None:
@@ -542,7 +544,7 @@ class RBFInterpolator(eqx.Module):
         return out
 
     @eqx.filter_jit
-    def __call__(self, x: Float[Array, " Q N"]) -> Shaped[Array, " Q *d_shape"]:
+    def __call__(self, x: Float[ArrayLike, " Q N"]) -> Shaped[Array, " Q *d_shape"]:
         """Evaluate the interpolant at `x`.
 
         Parameters
