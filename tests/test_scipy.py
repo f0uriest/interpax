@@ -785,9 +785,9 @@ class TestCubicSpline:
             order, value = bc_start
             assert_allclose(
                 S(x[0], order),
-                value,
+                value,  # pyright: ignore
                 rtol=tol,
-                atol=tol,  # pyright: ignore
+                atol=tol,
             )
 
         if bc_end == "not-a-knot":
@@ -804,9 +804,9 @@ class TestCubicSpline:
             order, value = bc_end
             assert_allclose(
                 S(x[-1], order),
-                value,
+                value,  # pyright: ignore
                 rtol=tol,
-                atol=tol,  # pyright: ignore
+                atol=tol,
             )
 
     def check_all_bc(self, x, y, axis):
