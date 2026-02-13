@@ -75,6 +75,7 @@ def _monomial_powers(ndim: int, degree: int) -> Int[Array, " nmonos ndim"]:
     return out
 
 
+@eqx.filter_jit
 def _build_system(
     y: Float[Array, " P N"],
     d: Shaped[Array, " P *d_shape"],
@@ -154,6 +155,7 @@ def _build_system(
     return lhs, rhs, shift, scale
 
 
+@eqx.filter_jit
 def _build_evaluation_coefficients(
     x: Float[Array, " Q N"],
     y: Float[Array, " P N"],
@@ -539,6 +541,7 @@ class RBFInterpolator(eqx.Module):
 
         return out
 
+    @eqx.filter_jit
     def __call__(self, x: Float[Array, " Q N"]) -> Shaped[Array, " Q *d_shape"]:
         """Evaluate the interpolant at `x`.
 
