@@ -395,7 +395,7 @@ class RBFInterpolator(eqx.Module):
         # columns. Otherwise, the LHS matrix would need to be converted to
         # complex and take up 2x more memory than necessary.
         if jnp.iscomplexobj(d):
-            float_dtype = jnp.float32 if d_dtype == jnp.complex64 else jnp.float64
+            float_dtype = d.real.dtype
             d = d.view(float_dtype)
 
         if jnp.isscalar(smoothing):
