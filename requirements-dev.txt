@@ -6,16 +6,16 @@ scipy >= 1.10.0, <= 1.15.3
 # building the docs
 sphinx >= 3.0.0, <= 8.2.3
 sphinx_copybutton <= 0.5.2
-sphinx-rtd-theme >= 1.0, < 3.0.3
+sphinx-rtd-theme >= 1.0, < 3.1.1
 sphinx-github-style >= 1.0, <= 1.2.2
 
 # linting
-black == 25.12.0
+black == 26.1.0
 flake8 >= 5.0.0, <= 7.3.0
 flake8-docstrings >= 1.0.0, <= 1.7.0
 flake8-eradicate >= 1.0.0, <= 1.5.0
 flake8-isort >= 5.0.0, <= 7.0.0
-pre-commit <= 4.5.0
+pre-commit <= 4.5.1
 pyright < 1.2
 
 # testing and benchmarking
