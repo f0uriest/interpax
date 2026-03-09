@@ -114,6 +114,38 @@ class TestInterp1D:
         np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-2)
 
     @pytest.mark.unit
+    def test_interp1d_even_spaced(self):
+        """Test for interpolating vwith evenly spaced grid."""
+        xp = np.linspace(0, 2 * np.pi, 100)
+        x = np.linspace(0, 2 * np.pi, 300)[10:-10]
+        f = lambda x: np.array([np.sin(x), np.cos(x)])
+        fp = f(xp).T
+
+        fq = interp1d(x, xp, fp, method="nearest", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-2, atol=1e-1)
+
+        fq = interp1d(x, xp, fp, method="linear", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-3)
+
+        fq = interp1d(x, xp, fp, method="cubic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="cubic2", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="cardinal", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="catmull-rom", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="monotonic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-3)
+
+        fq = interp1d(x, xp, fp, method="monotonic-0", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-2)
+
+    @pytest.mark.unit
     def test_interp1d_extrap_periodic(self):
         """Test extrapolation and periodic BC of 1d interpolation."""
         xp = np.linspace(0, 2 * np.pi, 200)
@@ -251,6 +283,27 @@ class TestInterp2D:
         fq = interp2d(x, y, xp, yp, fp, method="cubic")
         np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-5, atol=2e-3)
 
+    @pytest.mark.unit
+    def test_interp2d_even_spaced(self):
+        """Test for interpolating with evenly spaced grid."""
+        xp = np.linspace(0, 3 * np.pi, 99)
+        yp = np.linspace(0, 2 * np.pi, 40)
+        x = np.linspace(0, 3 * np.pi, 200)
+        y = np.linspace(0, 2 * np.pi, 200)
+        xxp, yyp = np.meshgrid(xp, yp, indexing="ij")
+
+        f = lambda x, y: np.array([np.sin(x) * np.cos(y), np.sin(x) + np.cos(y)])
+        fp = f(xxp.T, yyp.T).T
+
+        fq = interp2d(x, y, xp, yp, fp, method="nearest", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-2, atol=1.2e-1)
+
+        fq = interp2d(x, y, xp, yp, fp, method="linear", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-3, atol=1e-2)
+
+        fq = interp2d(x, y, xp, yp, fp, method="cubic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-5, atol=2e-3)
+
 
 class TestInterp3D:
     """Tests for interp3d function."""
@@ -353,6 +406,29 @@ class TestInterp3D:
         np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-3, atol=1e-1)
 
         fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic")
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-5, atol=5e-3)
+
+    @pytest.mark.unit
+    def test_interp3d_even_spaced(self):
+        """Test for interpolating with evenly spaced grid."""
+        x = np.linspace(0, np.pi, 1000)
+        y = np.linspace(0, 2 * np.pi, 1000)
+        z = np.linspace(0, 3, 1000)
+        xp = np.linspace(0, np.pi, 20)
+        yp = np.linspace(0, 2 * np.pi, 30)
+        zp = np.linspace(0, 3, 25)
+        xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
+
+        f = lambda x, y, z: np.array([np.sin(x) * np.cos(y) * z**2, 0.1 * (x + y - z)])
+        fp = f(xxp.T, yyp.T, zzp.T).T
+
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="nearest", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-2, atol=1)
+
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="linear", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-3, atol=1e-1)
+
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic", even_spacing=True)
         np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-5, atol=5e-3)
 
 
