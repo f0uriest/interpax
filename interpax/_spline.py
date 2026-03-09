@@ -27,6 +27,7 @@ OTHER_METHODS = ("nearest", "linear")
 METHODS_1D = CUBIC_METHODS + OTHER_METHODS
 METHODS_2D = CUBIC_METHODS + OTHER_METHODS
 METHODS_3D = CUBIC_METHODS + OTHER_METHODS
+METHODS_ND = OTHER_METHODS
 
 
 class AbstractInterpolator(eqx.Module):
@@ -438,6 +439,90 @@ class Interpolator3D(AbstractInterpolator):
             self.extrap,
             self.period,
             **self.derivs,
+        )
+
+
+class InterpolatorNd(AbstractInterpolator):
+    """Convenience class for representing an N-D interpolated function.
+
+    Parameters
+    ----------
+    x : tuple of ndarray
+        Coordinates of known function values ("knots") for each dimension.
+        Each element has shape (Ni,).
+    f : ndarray, shape(N1, N2, ..., Nk, ...)
+        Function values to interpolate on the rectilinear grid.
+    method : str
+        Method of interpolation:
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: multilinear interpolation
+
+    extrap : bool, float, array-like
+        Whether to extrapolate values beyond knots (True) or return nan (False),
+        or a specified value to return for query points outside the bounds. Can
+        also be passed as a tuple to specify different conditions per dimension.
+    period : float > 0, None, array-like
+        Periodicity of the function in each direction. None denotes no periodicity,
+        otherwise function is assumed to be periodic on the interval [0,period].
+
+    """
+
+    x: tuple
+    f: Inexact[Array, "..."]
+    derivs: dict
+    method: str = eqx.field(static=True)
+    extrap: Union[bool, float, tuple]
+    period: Union[None, float, tuple]
+    axis: int
+
+    def __init__(
+        self,
+        x: tuple,
+        f: Num[ArrayLike, "..."],
+        method: str = "linear",
+        extrap: Union[bool, float, tuple] = False,
+        period: Union[None, float, tuple] = None,
+    ):
+        x = tuple(asarray_inexact(xi) for xi in x)
+        f = asarray_inexact(f)
+
+        for d, xd in enumerate(x):
+            errorif(
+                (len(xd) != f.shape[d]) or (xd.ndim != 1),
+                ValueError,
+                f"x[{d}] and f.shape[{d}] must be arrays of equal length",
+            )
+        errorif(method not in METHODS_ND, ValueError, f"unknown method {method}")
+
+        self.x = x
+        self.f = f
+        self.axis = 0
+        self.method = method
+        self.extrap = extrap
+        self.period = period
+        self.derivs = {}
+
+    def __call__(self, *xq: Real[ArrayLike, "..."]) -> Inexact[Array, "..."]:
+        """Evaluate the interpolated function.
+
+        Parameters
+        ----------
+        xq : tuple of ndarray
+            Query points for each dimension. Arrays will be broadcast together.
+
+        Returns
+        -------
+        fq : ndarray
+            Interpolated values.
+        """
+        return interpNd(
+            xq,
+            self.x,
+            self.f,
+            self.method,
+            self.extrap,
+            self.period,
         )
 
 
@@ -1103,6 +1188,185 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fq = _extrap(zq, fq, z, lowz, highz)
 
     return fq.reshape(outshape)
+
+
+@wrap_jit(static_argnames=["method"])
+def interpNd(
+    xq: tuple,
+    x: tuple,
+    f: Num[ArrayLike, "..."],
+    method: str = "linear",
+    extrap: Union[bool, float, tuple] = False,
+    period: Union[None, float, tuple] = None,
+) -> Inexact[Array, "..."]:
+    """Interpolate on a rectilinear grid in N dimensions.
+
+    Parameters
+    ----------
+    xq : tuple of ndarray
+        Query points for each dimension. Arrays will be broadcast together.
+    x : tuple of ndarray
+        Coordinates of known function values ("knots") for each dimension.
+    f : ndarray, shape(N1, N2, ..., Nk, ...)
+        Function values on the grid.
+    method : str
+        Method of interpolation:
+
+        - ``'nearest'``: nearest neighbor interpolation
+        - ``'linear'``: multilinear interpolation
+
+    extrap : bool, float, array-like
+        Whether to extrapolate values beyond knots (True) or return nan (False),
+        or a specified value to return for query points outside the bounds. Can
+        also be passed as a tuple to specify different conditions per dimension.
+    period : float > 0, None, array-like
+        Periodicity of the function in each direction. None denotes no periodicity,
+        otherwise function is assumed to be periodic on the interval [0,period].
+
+    Returns
+    -------
+    fq : ndarray
+        Interpolated values at query points.
+
+    Notes
+    -----
+    For repeated interpolation given the same x, f data, recommend using
+    InterpolatorNd which caches the grid information.
+
+    """
+    f = asarray_inexact(f)
+    ndim = len(x)
+
+    x = tuple(asarray_inexact(xi) for xi in x)
+
+    for d, xd in enumerate(x):
+        errorif(
+            (len(xd) != f.shape[d]) or (xd.ndim != 1),
+            ValueError,
+            f"x[{d}] and f.shape[{d}] must be arrays of equal length",
+        )
+    errorif(method not in METHODS_ND, ValueError, f"unknown method {method}")
+    errorif(len(xq) != ndim, ValueError, "xq must have same length as x")
+
+    xq = tuple(asarray_inexact(xqi) for xqi in xq)
+    xq_broadcast = jnp.broadcast_arrays(*xq)
+    outshape = xq_broadcast[0].shape + f.shape[ndim:]
+
+    # Parse period and extrap
+    periods = _parse_ndarg(period, ndim)
+    extrap_parsed = _parse_extrap(extrap, ndim)
+
+    # Handle periodicity
+    x_list = list(x)
+    f_work = f
+    xq_list = list(xq_broadcast)
+    extrap_list = list(extrap_parsed)
+
+    for d in range(ndim):
+        if periods[d] is not None:
+            xq_d, x_d, f_work = _make_periodic_nd(
+                xq_list[d], x_list[d], periods[d], d, f_work
+            )
+            xq_list[d] = xq_d
+            x_list[d] = x_d
+
+            extrap_list[2 * d] = True
+            extrap_list[2 * d + 1] = True
+
+    x = tuple(x_list)
+    xq_broadcast = tuple(xq_list)
+
+    if method == "nearest":
+        fq = _interpNd_nearest(xq_broadcast, x, f_work)
+    else:  # linear
+        fq = _interpNd_linear(xq_broadcast, x, f_work)
+
+    for d in range(ndim):
+        lo = extrap_list[2 * d]
+        hi = extrap_list[2 * d + 1]
+        fq = _extrap(xq_broadcast[d].ravel(), fq, x[d], lo, hi)
+
+    return fq.reshape(outshape)
+
+
+def _make_periodic_nd(xq, x, period, axis, f):
+    """Make a single dimension periodic for ND interpolation."""
+    period = abs(period)
+    xq = xq % period
+    x = x % period
+    i = jnp.argsort(x)
+    x = x[i]
+    x = jnp.concatenate([x[-1:] - period, x, x[:1] + period])
+    f = jnp.take(f, i, axis, mode="wrap")
+    f = jnp.concatenate(
+        [
+            jnp.take(f, jnp.array([-1]), axis),
+            f,
+            jnp.take(f, jnp.array([0]), axis),
+        ],
+        axis=axis,
+    )
+    return xq, x, f
+
+
+def _interpNd_nearest(xq_tuple, x_tuple, f):
+    """Nearest neighbor interpolation in N dimensions."""
+    ndim = len(x_tuple)
+
+    indices = []
+    for d in range(ndim):
+        xq_d = xq_tuple[d].ravel()
+        x_d = x_tuple[d]
+        i = jnp.searchsorted(x_d, xq_d)
+        i = jnp.clip(i, 0, len(x_d) - 1)
+        i_prev = jnp.maximum(i - 1, 0)
+        dist_i = jnp.abs(xq_d - x_d[i])
+        dist_prev = jnp.abs(xq_d - x_d[i_prev])
+        i = jnp.where(dist_prev < dist_i, i_prev, i)
+        indices.append(i)
+
+    result = f[tuple(indices)]
+    return result
+
+
+def _interpNd_linear(xq_tuple, x_tuple, f):
+    """Multilinear interpolation in N dimensions."""
+    ndim = len(x_tuple)
+    nq = xq_tuple[0].size
+
+    indices_lo = []
+    weights = []
+    for d in range(ndim):
+        xq_d = xq_tuple[d].ravel()
+        x_d = x_tuple[d]
+        i = jnp.clip(jnp.searchsorted(x_d, xq_d, side="right"), 1, len(x_d) - 1)
+        indices_lo.append(i - 1)
+
+        dx = x_d[i] - x_d[i - 1]
+        dxi = jnp.where(dx == 0, 0, 1 / dx)
+        t = (xq_d - x_d[i - 1]) * dxi
+        t = jnp.where(dx == 0, 0.5, t)  # handle zero spacing
+        weights.append(t)
+
+    result = jnp.zeros((nq,) + f.shape[ndim:], dtype=f.dtype)
+
+    for i in range(1 << ndim):
+        idx = tuple(indices_lo[d] + ((i >> d) & 1) for d in range(ndim))
+
+        w = jnp.ones(nq, dtype=f.dtype)
+        for d in range(ndim):
+            if (i >> d) & 1:
+                w = w * weights[d]
+            else:
+                w = w * (1 - weights[d])
+
+        corner_values = f[idx]
+        if corner_values.ndim > 1:
+            result = result + w[:, None] * corner_values
+        else:
+            result = result + w * corner_values
+
+    return result
 
 
 @wrap_jit(static_argnames=["axis"])
