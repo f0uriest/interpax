@@ -355,8 +355,8 @@ def _monotonic(x: jax.Array, f: jax.Array, axis: int, zero_slope: bool):
     dk = jnp.where(condition, 0, 1.0 / whmean)
 
     def slope_zero():
-        d0 = jnp.zeros((1, dk.shape[1]), dtype=f.dtype)
-        d1 = jnp.zeros((1, dk.shape[1]), dtype=f.dtype)
+        d0 = jnp.zeros((1, *dk.shape[1:]), dtype=f.dtype)
+        d1 = jnp.zeros((1, *dk.shape[1:]), dtype=f.dtype)
         return d0, d1
 
     def slope_nonzero():
