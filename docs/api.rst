@@ -54,8 +54,8 @@ Fourier interpolation of periodic functions in 1D and 2D
 
     interpax.fft_interp1d
     interpax.fft_interp2d
-    interpax.ifft_interp1d
-    interpax.ifft_interp2d
+    interpax.irfft_interp1d
+    interpax.irfft_interp2d
 
 
 Approximating first derivatives for cubic splines
