@@ -127,7 +127,7 @@ def fft_interp2d(
     """Interpolation of a 2D periodic function via FFT.
 
     For real valued data, uses real transforms, reducing cost by ~1/2.
-    
+
     Parameters
     ----------
     f : ndarray, shape(nx, ny, ...)
