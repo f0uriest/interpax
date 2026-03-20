@@ -124,8 +124,10 @@ def fft_interp2d(
     dx: float = 1.0,
     dy: float = 1.0,
 ) -> Inexact[Array, "n1 n2 ... s"]:
-    """Interpolation of a real-valued 2D periodic function via FFT.
+    """Interpolation of a 2D periodic function via FFT.
 
+    For real valued data, uses real transforms, reducing cost by ~1/2.
+    
     Parameters
     ----------
     f : ndarray, shape(nx, ny, ...)
