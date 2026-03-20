@@ -2,7 +2,7 @@
 
 from . import _version
 from ._fd_derivs import approx_df
-from ._fourier import fft_interp1d, fft_interp2d, ifft_interp1d, ifft_interp2d
+from ._fourier import fft_interp1d, fft_interp2d, irfft_interp1d, irfft_interp2d
 from ._ppoly import (
     Akima1DInterpolator,
     CubicHermiteSpline,
@@ -19,5 +19,23 @@ from ._spline import (
     interp2d,
     interp3d,
 )
+
+__all__ = [
+    "approx_df",
+    "fft_interp1d",
+    "fft_interp2d",
+    "Akima1DInterpolator",
+    "CubicHermiteSpline",
+    "CubicSpline",
+    "PchipInterpolator",
+    "PPoly",
+    "AbstractInterpolator",
+    "Interpolator1D",
+    "Interpolator2D",
+    "Interpolator3D",
+    "interp1d",
+    "interp2d",
+    "interp3d",
+]
 
 __version__ = _version.get_versions()["version"]

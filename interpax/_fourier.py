@@ -14,7 +14,9 @@ def fft_interp1d(
     sx: Optional[Num[ArrayLike, " s"]] = None,
     dx: float = 1.0,
 ) -> Inexact[Array, "n ... s"]:
-    """Interpolation of a real-valued 1D periodic function via FFT.
+    """Interpolation of a 1d periodic function via FFT.
+
+    For real valued data, uses real transforms, reducing cost by 1/2.
 
     Parameters
     ----------
@@ -23,22 +25,42 @@ def fft_interp1d(
     n : int
         Number of desired interpolation points.
     sx : ndarray or None
-        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx).
+        Shift in x to evaluate at. If original data is f(x), interpolates to f(x + sx)
     dx : float
-        Spacing of source points.
+        Spacing of source points
 
     Returns
     -------
     fi : ndarray, shape(n, ..., len(sx))
-        Interpolated (and possibly shifted) data points.
-
+        Interpolated (and possibly shifted) data points
     """
     f = asarray_inexact(f)
-    return ifft_interp1d(jnp.fft.rfft(f, axis=0, norm="forward"), f.shape[0], n, sx, dx)
+    if not jnp.iscomplexobj(f):
+        return irfft_interp1d(
+            jnp.fft.rfft(f, axis=0, norm="forward"), f.shape[0], n, sx, dx
+        )
+    if sx is None:
+        sx = jnp.array(0.0, dtype=f.real.dtype)
+    sx = asarray_inexact(sx)
+    rtype = jnp.result_type(f.real, sx, dx)
+    dtype = jnp.result_type(f, sx, dx)
+    f = f.astype(dtype)
+    sx = sx.astype(rtype)
+    c = jnp.fft.ifft(f, axis=0)
+    nx = c.shape[0]
+    sx = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(nx, dtype=rtype)[:, None] * sx / dx)
+    c = (c[None].T * sx).T
+    c = jnp.moveaxis(c, 0, -1)
+    pad = ((n - nx) // 2, n - nx - (n - nx) // 2)
+    if nx % 2 != 0:
+        pad = pad[::-1]
+    c = jnp.fft.ifftshift(_pad_along_axis(jnp.fft.fftshift(c, axes=0), pad, axis=0))
+    out = jnp.fft.fft(c, axis=0)
+    return out
 
 
-def ifft_interp1d(
-    c,
+def irfft_interp1d(
+    c: Num[ArrayLike, "nx ..."],
     nx: int,
     n: int,
     sx: Optional[Num[ArrayLike, " s"]] = None,
@@ -65,6 +87,7 @@ def ifft_interp1d(
         Interpolated (and possibly shifted) data points.
 
     """
+    c = asarray_inexact(c)
     nx_half = c.shape[0]
     if n < nx_half:
         # truncate early to reduce computation
@@ -72,7 +95,7 @@ def ifft_interp1d(
 
     if sx is not None:
         sx = asarray_inexact(sx)
-        sx = jnp.exp(1j * _rfftfreq(c.shape[0], nx, dx)[:, None] * sx)
+        sx = jnp.exp(1j * _rfftfreq(c.shape[0], nx, dx, c.real.dtype)[:, None] * sx)
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
 
@@ -84,7 +107,7 @@ def ifft_interp1d(
         c = c.at[-1].divide(2)
     c = c.at[0].divide(2) * 2
 
-    x = jnp.linspace(0, 2 * jnp.pi, n, endpoint=False)
+    x = jnp.linspace(0, 2 * jnp.pi, n, endpoint=False, dtype=c.real.dtype)
     x = jnp.exp(1j * (c.shape[0] // 2) * x).reshape(n, *((1,) * (c.ndim - 1)))
 
     c = _fft_pad(c, n, 0)
@@ -121,35 +144,74 @@ def fft_interp2d(
         Interpolated (and possibly shifted) data points.
 
     """
+    f = asarray_inexact(f)
     nx, ny = f.shape[:2]
+    if not jnp.iscomplexobj(f):
+        if (sx is None or jnp.size(sx) == 1) and (sy is None or jnp.size(sy) == 1):
+            if n1 < nx:
+                f = fft_interp1d(f, n1, sx, dx)
+                if sx is not None:
+                    f = f.squeeze(-1)
+                return fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).swapaxes(0, 1)
+            if n2 < ny:
+                f = fft_interp1d(f.swapaxes(0, 1), n2, sy, dy)
+                if sy is not None:
+                    f = f.squeeze(-1)
+                return fft_interp1d(f.swapaxes(0, 1), n1, sx, dx)
 
-    # https://github.com/f0uriest/interpax/pull/117
-    if (sx is None or jnp.size(sx) == 1) and (sy is None or jnp.size(sy) == 1):
-        if n1 < nx:
-            f = fft_interp1d(f, n1, sx, dx)
-            if sx is not None:
-                f = f.squeeze(-1)
-            return fft_interp1d(f.swapaxes(0, 1), n2, sy, dy).swapaxes(0, 1)
-        if n2 < ny:
-            f = fft_interp1d(f.swapaxes(0, 1), n2, sy, dy)
-            if sy is not None:
-                f = f.squeeze(-1)
-            return fft_interp1d(f.swapaxes(0, 1), n1, sx, dx)
+        return irfft_interp2d(
+            jnp.fft.rfft2(f, axes=(0, 1), norm="forward"),
+            ny,
+            n1,
+            n2,
+            sx,
+            sy,
+            dx,
+            dy,
+        )
+    c = jnp.fft.ifft2(f, axes=(0, 1))
+    nx, ny = c.shape[:2]
+    if (sx is not None) and (sy is not None):
+        sx = asarray_inexact(sx)
+        sy = asarray_inexact(sy)
+        sx = jnp.exp(
+            -1j
+            * 2
+            * jnp.pi
+            * jnp.fft.fftfreq(nx, dtype=c.real.dtype)[:, None]
+            * sx
+            / dx
+        )
+        sy = jnp.exp(
+            -1j
+            * 2
+            * jnp.pi
+            * jnp.fft.fftfreq(ny, dtype=c.real.dtype)[:, None]
+            * sy
+            / dy
+        )
+        c = (c[None].T * sx[None, :, :] * sy[:, None, :]).T
+        c = jnp.moveaxis(c, 0, -1)
+    padx = ((n1 - nx) // 2, n1 - nx - (n1 - nx) // 2)
+    pady = ((n2 - ny) // 2, n2 - ny - (n2 - ny) // 2)
+    if nx % 2 != 0:
+        padx = padx[::-1]
+    if ny % 2 != 0:
+        pady = pady[::-1]
 
-    return ifft_interp2d(
-        jnp.fft.rfft2(asarray_inexact(f), axes=(0, 1), norm="forward"),
-        ny,
-        n1,
-        n2,
-        sx,
-        sy,
-        dx,
-        dy,
+    c = jnp.fft.ifftshift(
+        _pad_along_axis(jnp.fft.fftshift(c, axes=0), padx, axis=0), axes=0
+    )
+    c = jnp.fft.ifftshift(
+        _pad_along_axis(jnp.fft.fftshift(c, axes=1), pady, axis=1), axes=1
     )
 
+    out = jnp.fft.fft2(c, axes=(0, 1))
+    return out
 
-def ifft_interp2d(
-    c,
+
+def irfft_interp2d(
+    c: Num[ArrayLike, "nx ny ..."],
     ny: int,
     n1: int,
     n2: int,
@@ -180,6 +242,7 @@ def ifft_interp2d(
         Interpolated (and possibly shifted) data points.
 
     """
+    c = asarray_inexact(c)
     nx = c.shape[0]
     ny_half = c.shape[1]
     if n2 < ny_half:
@@ -190,8 +253,12 @@ def ifft_interp2d(
         sx = asarray_inexact(sx)
         sy = asarray_inexact(sy)
         tau = 2 * jnp.pi
-        sx = jnp.exp(1j * jnp.fft.fftfreq(nx, dx / tau)[:, None] * sx)
-        sy = jnp.exp(1j * _rfftfreq(c.shape[1], ny, dy)[:, None] * sy)
+        sx = jnp.exp(
+            1j * jnp.fft.fftfreq(nx, dx / tau, dtype=c.real.dtype)[:, None] * sx
+        )
+        sy = jnp.exp(
+            1j * _rfftfreq(c.shape[1], ny, dy, dtype=c.real.dtype)[:, None] * sy
+        )
         c = (c[None].T * (sx[None] * sy[:, None])).T
         c = jnp.moveaxis(c, 0, -1)
 
@@ -204,7 +271,7 @@ def ifft_interp2d(
         c = c.at[:, -1].divide(2)
     c = c.at[:, 0].divide(2) * 2
 
-    y = jnp.linspace(0, 2 * jnp.pi, n2, endpoint=False)
+    y = jnp.linspace(0, 2 * jnp.pi, n2, endpoint=False, dtype=c.real.dtype)
     y = jnp.exp(1j * (c.shape[1] // 2) * y).reshape(1, n2, *((1,) * (c.ndim - 2)))
 
     c = jnp.fft.ifft(c, axis=0, norm="forward")
@@ -212,8 +279,8 @@ def ifft_interp2d(
     return (jnp.fft.ifft(c, axis=1, norm="forward") * y).real
 
 
-def _rfftfreq(n, nx, dx):
-    return jnp.arange(n) * (2 * jnp.pi / (nx * dx))
+def _rfftfreq(n, nx, dx, dtype):
+    return jnp.arange(n, dtype=dtype) * (2 * jnp.pi / (nx * dx))
 
 
 def _fft_pad(c_shift, n_out, axis):
