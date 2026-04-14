@@ -350,13 +350,13 @@ def _monotonic(x: jax.Array, f: jax.Array, axis: int, zero_slope: bool):
         w1 = jnp.expand_dims(w1, tuple(range(1, df.ndim)))
         w2 = jnp.expand_dims(w2, tuple(range(1, df.ndim)))
 
-    whmean = (w1 / mk[:-1, :] + w2 / mk[1:, :]) / (w1 + w2)
+    whmean = safediv(safediv(w1, mk[:-1, :]) + safediv(w2, mk[1:, :]), w1 + w2)
 
-    dk = jnp.where(condition, 0, 1.0 / whmean)
+    dk = jnp.where(condition, 0, safediv(jnp.array(1.0), whmean))
 
     def slope_zero():
-        d0 = jnp.zeros((1, dk.shape[1]), dtype=f.dtype)
-        d1 = jnp.zeros((1, dk.shape[1]), dtype=f.dtype)
+        d0 = jnp.zeros((1, *dk.shape[1:]), dtype=f.dtype)
+        d1 = jnp.zeros((1, *dk.shape[1:]), dtype=f.dtype)
         return d0, d1
 
     def slope_nonzero():
@@ -422,3 +422,22 @@ def _akima(x, f, axis):
     df = (m4m3 * m2 + m2m1 * m3) / jnp.where(mask, f12, 1.0)
     df = jnp.where(mask, df, 0.5 * (m[3:] + m[:-3]))
     return jnp.moveaxis(df, 0, axis)
+
+
+def safediv(a: jax.Array, b: jax.Array, fill=jnp.array(0), threshold=jnp.array(0)):
+    """Divide a/b with guards for division by zero.
+
+    Parameters
+    ----------
+    a, b : ndarray
+        Numerator and denominator.
+    fill : float, ndarray, optional
+        Value to return where b is zero.
+    threshold : float >= 0
+        How small is b allowed to be.
+
+    """
+    mask = jnp.abs(b) <= threshold
+    num = jnp.where(mask, fill, a)
+    den = jnp.where(mask, 1, b)
+    return num / den

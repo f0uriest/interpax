@@ -261,6 +261,10 @@ class TestInterp2D:
             )
             assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1e-3)
+            fq = interp(
+                x, y, xp, yp, fp, method="monotonic-0", period=(2 * np.pi, 2 * np.pi)
+            )
+            np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=2e-2)
 
     @pytest.mark.unit
     def test_interp2d_vector_valued(self):
@@ -385,6 +389,12 @@ class TestInterp3D:
             assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
+            fq = interp(x, y, z, xp, yp, zp, fp, method="monotonic")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=1e-2)
+
+            fq = interp(x, y, z, xp, yp, zp, fp, method="monotonic-0")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=0.3)
+
     @pytest.mark.unit
     def test_interp3d_vector_valued(self):
         """Test for interpolating vector valued function."""
@@ -407,6 +417,9 @@ class TestInterp3D:
 
         fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic")
         np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-5, atol=5e-3)
+        
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="monotonic")
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-2, atol=1e-2)
 
     @pytest.mark.unit
     def test_interp3d_even_spaced(self):
@@ -430,6 +443,9 @@ class TestInterp3D:
 
         fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic", even_spacing=True)
         np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-5, atol=5e-3)
+        
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="monotonic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-2, atol=1e-2)
 
 
 @pytest.mark.unit
