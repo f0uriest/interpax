@@ -1,10 +1,149 @@
 [build-system]
-# These are the assumed default build requirements from pip:
-# https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support
-requires = ["setuptools>=40.8.0", "wheel", "versioneer-518"]
+requires = [
+    "setuptools>=61",
+    "wheel",
+    "versioneer[toml]",
+]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "interpax"
+dynamic = ["version"]
+description = "Interpolation and function approximation with JAX"
+readme = "README.rst"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Rory Conlin", email = "wconlin@princeton.edu" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
+keywords = [
+    "interpolation",
+    "spline",
+    "cubic",
+    "fourier",
+    "approximation",
+]
+dependencies = [
+    "equinox>=0.11.0,<0.14",
+    "jax>=0.4.30,<0.9",
+    "jaxtyping>=0.2.24,<0.4.0",
+    "lineax>=0.0.5,<=0.0.8",
+    "numpy>=1.20.0,<2.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/f0uriest/interpax"
+Issues = "https://github.com/f0uriest/interpax/issues"
+Contributing = "https://github.com/f0uriest/interpax/blob/master/CONTRIBUTING.rst"
+Source = "https://github.com/f0uriest/interpax/"
+Documentation = "https://interpax.readthedocs.io/"
+
+[project.optional-dependencies]
+dev = [
+    "scipy>=1.10.0,<=1.15.3",
+    "sphinx>=3.0.0,<=8.2.3",
+    "sphinx_copybutton<=0.5.2",
+    "sphinx-rtd-theme>=1.0,<3.0.3",
+    "sphinx-github-style>=1.0,<=1.2.2",
+    "black==25.12.0",
+    "flake8>=5.0.0,<=7.3.0",
+    "flake8-docstrings>=1.0.0,<=1.7.0",
+    "flake8-eradicate>=1.0.0,<=1.5.0",
+    "flake8-isort>=5.0.0,<=7.0.0",
+    "pre-commit<=4.5.0",
+    "pyright<1.2",
+    "pytest>=5.0.0,<=9.0.2",
+    "pytest-benchmark<=5.2.3",
+    "pytest-cov>=2.6.0,<=7.0.0",
+    "pytest-monitor<=1.6.6",
+    "build",
+]
+
+[tool.setuptools]
+packages = { find = { exclude = ["docs", "tests", "local", "report"] } }
+include-package-data = true
+
+[tool.versioneer]
+VCS = "git"
+style = "pep440"
+versionfile_source = "interpax/_version.py"
+versionfile_build = "interpax/_version.py"
+tag_prefix = "v"
+parentdir_prefix_version = "interpax-"
+
+[tool.coverage.run]
+source = ["interpax/"]
+omit = ["interpax/_version.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: marks small unit tests",
+    "regression: marks end to end regression tests",
+    "slow: marks tests as slow (deselect with 'pytest -m \"not slow\"').",
+    "fast: mark tests as fast.",
+]
+filterwarnings = [
+    "error",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    "ignore:numpy.ndarray size changed:RuntimeWarning",
+    "ignore::DeprecationWarning:ml_dtypes.*",
+]
+
+[tool.flake8]
+ignore = [
+    "E1",
+    "E2",
+    "W503",
+    "W504",
+    "W505",
+    "E704",
+    "E731",
+    "E741",
+    "D401",
+    "D105",
+    "F722",
+]
+per-file-ignores = [
+    "interpax/__init__.py: F401",
+    "tests/*: D100, D101, D102, D103, D106",
+]
+max-line-length = 88
+exclude = [
+    "docs/*",
+    "build/*",
+    "local/*",
+    ".git/*",
+    "versioneer.py",
+    "interpax/_version.py",
+]
+max-complexity = 15
+docstring-convention = "numpy"
+
+[tool.isort]
+profile = "black"
+src_paths = ["interpax", "test"]
 
 [tool.pyright]
 include = ["interpax/*.py", "tests/*.py"]
-exclude = ["interpax/_version.py", "versioneer.py", "docs/conf.py",
-]
+exclude = ["interpax/_version.py", "versioneer.py", "docs/conf.py"]
