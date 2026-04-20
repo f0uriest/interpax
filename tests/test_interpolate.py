@@ -1,5 +1,8 @@
 """Tests for interpolation functions."""
 
+import subprocess
+import sys
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -647,3 +650,26 @@ def test_extrap_float():
     np.testing.assert_allclose(interpol(4.5, 5.3), 1.0)
     np.testing.assert_allclose(interpol(-4.5, 5.3), 0.0)
     np.testing.assert_allclose(interpol(4.5, -5.3), 0.0)
+
+
+@pytest.mark.unit
+def test_import_does_not_initialize_jax_backend():
+    """Importing interpax must not trigger JAX backend initialization."""
+    script = """
+import jax
+jax.config.update('jax_enable_x64', True)
+import interpax  # noqa: F401
+import jax._src.xla_bridge as xb
+if xb._backends:
+    raise SystemExit(f"JAX backend initialized on import: {list(xb._backends)}")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"JAX backend was initialized during `import interpax`.\n"
+        f"stderr: {result.stderr}"
+    )
