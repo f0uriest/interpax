@@ -476,7 +476,7 @@ def test_fft_interp2d(dtype):
                 sx=0.2,
                 sy=0.3,
                 dx=np.diff(x[spx][1])[0],
-                dy=np.diff(y[spy][1])[0]
+                dy=np.diff(y[spy][1])[0],
             ).squeeze()
             np.testing.assert_allclose(
                 fs,
