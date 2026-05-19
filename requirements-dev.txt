@@ -15,7 +15,7 @@ flake8 >= 5.0, < 7.4
 flake8-docstrings >= 1.0, < 1.8
 flake8-eradicate >= 1.0, < 1.6
 flake8-isort >= 5.0, < 7.1
-pre-commit < 4.6
+pre-commit < 4.7
 pyright < 1.2
 
 # testing and benchmarking
