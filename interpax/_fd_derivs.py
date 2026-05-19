@@ -424,7 +424,7 @@ def _akima(x, f, axis):
     return jnp.moveaxis(df, 0, axis)
 
 
-def safediv(a: jax.Array, b: jax.Array, fill=jnp.array(0), threshold=jnp.array(0)):
+def safediv(a: jax.Array, b: jax.Array, fill=0, threshold=0):
     """Divide a/b with guards for division by zero.
 
     Parameters
