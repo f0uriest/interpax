@@ -593,8 +593,8 @@ class RBFInterpolator(eqx.Module):
             # evaluation point.
             neighbors, _ = jk.query_neighbors(self._tree, x, k=self.neighbors)
             if self.neighbors == 1:
-                # jaxkd may squeeze the output when k=1, ensure it's 2D
-                neighbors = jnp.atleast_2d(neighbors).T
+                # jaxkd may squeeze the output when k=1, ensure (Q, 1)
+                neighbors = jnp.reshape(neighbors, (-1, 1))
 
             out = jnp.empty((nx, self.d.shape[1]), dtype=self.d.dtype)
 
