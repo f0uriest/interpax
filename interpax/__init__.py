@@ -37,6 +37,7 @@ __all__ = [
     "interp1d",
     "interp2d",
     "interp3d",
+    "RBFInterpolator",
 ]
 
 __version__ = _version.get_versions()["version"]
