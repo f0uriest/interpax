@@ -5,12 +5,12 @@ import warnings
 from itertools import combinations_with_replacement
 from typing import Any, Callable, Optional, Union, cast
 
-import numpy as np
 import equinox as eqx
 import jax
 import jax.lax
 import jax.numpy as jnp
 import jaxkd as jk
+import numpy as np
 from jax.scipy.linalg import solve
 from jaxtyping import Array, ArrayLike, Float, Int, Shaped
 from typing_extensions import Literal
@@ -349,7 +349,7 @@ class RBFInterpolator(eqx.Module):
     _coeffs: Optional[Shaped[Array, " P+R *d_shape"]]
     _tree: Optional[Any]
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         y: Float[ArrayLike, " P N"],
         d: Shaped[ArrayLike, " P *d_shape"],
