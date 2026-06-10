@@ -528,6 +528,7 @@ class RBFInterpolator(eqx.Module):
         chunksize = memory_budget // (self.powers.shape[0] + nnei) + 1
 
         def process_chunk(x_chunk):
+            x_chunk = jnp.atleast_2d(x_chunk)
             vec = _build_evaluation_coefficients(
                 x_chunk,
                 y,
@@ -539,7 +540,7 @@ class RBFInterpolator(eqx.Module):
             )
             return jnp.dot(vec, coeffs)
 
-        out = jax.lax.map(process_chunk, x[None, :], batch_size=chunksize)
+        out = jax.lax.map(process_chunk, x, batch_size=chunksize)
 
         return out
 

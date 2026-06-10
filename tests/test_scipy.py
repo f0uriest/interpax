@@ -1365,3 +1365,21 @@ class TestRBFInterpolator:
 
         # Should be very close to SciPy
         assert_allclose(values_jax, values_scipy, rtol=1e-8, atol=1e-8)
+
+    def test_neighbors_one(self):
+        """Test single-neighbor mode against SciPy."""
+        x, y = self._make_test_data_1d()
+
+        rbf_jax = RBFInterpolator(x, y, kernel="linear", neighbors=1)
+        rbf_scipy = scipy.interpolate.RBFInterpolator(
+            x, y, kernel="linear", neighbors=1
+        )
+
+        # Avoid midpoints between data points where jaxkd and scipy may
+        # break ties between equidistant neighbors differently.
+        x_test = np.array([[0.1], [0.35], [0.62], [0.9]])
+
+        values_jax = rbf_jax(x_test)
+        values_scipy = rbf_scipy(x_test)
+
+        assert_allclose(values_jax, values_scipy, rtol=1e-8, atol=1e-8)
