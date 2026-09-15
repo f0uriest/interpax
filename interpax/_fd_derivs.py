@@ -295,7 +295,10 @@ def _cubic2(x, f, axis, bc, dtype):
 
         A = lx.TridiagonalLinearOperator(diag, lower_diag, upper_diag)
 
-        solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal()).value
+        # throw=False skips lineax's error check, whose host callback can cause a
+        # cache miss on every call under jit. The system is nonsingular by
+        # construction, so there is no failure to report.
+        solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal(), throw=False).value
         fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
         fx = jnp.moveaxis(fx, 0, axis)
     return fx.astype(f.dtype)
@@ -340,7 +343,8 @@ def _cubic2_periodic(dx, df):
     T = lx.TridiagonalLinearOperator(
         diag.astype(dtype), lower_diag.astype(dtype), upper_diag.astype(dtype)
     )
-    solve = lambda rhs: lx.linear_solve(T, rhs, lx.Tridiagonal()).value
+    # throw=False skips lineax's error check, see _cubic2
+    solve = lambda rhs: lx.linear_solve(T, rhs, lx.Tridiagonal(), throw=False).value
     z = solve(u.astype(dtype))
     y = jnp.vectorize(solve, signature="(n)->(n)")(b.astype(dtype).T).T
     coef = jnp.tensordot(v, y, axes=1) / (1 + v @ z)

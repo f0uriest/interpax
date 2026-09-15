@@ -9,6 +9,12 @@ take a ``size`` argument for the number of roots to return and a ``fill_value`` 
 padding when fewer roots exist.
 - ``fft_interp2d`` now raises an error if only one of ``sx``, ``sy`` is given.
 - Importing interpax no longer initializes the JAX backend.
+- The ``axis`` keyword now works for ``interp1d``, ``interp2d``, ``interp3d`` and the
+``Interpolator1D/2D/3D`` classes. For 2D and 3D it is a tuple giving the axes of ``f``
+corresponding to each coordinate.
+- Fix ``Interpolator1D/2D/3D`` with ``period`` giving different results from
+``interp1d/2d/3d``. Derivatives for periodic data are now approximated using the
+wrapped neighbors of every knot, so all copies of a knot share the same derivative.
 
 **Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.3.14...main
 
