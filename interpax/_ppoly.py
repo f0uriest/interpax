@@ -418,13 +418,123 @@ class PPoly(eqx.Module):
 
         return sign * out.reshape(self.c.shape[2:])
 
-    def solve(self, y=0.0, discontinuity=True, extrapolate=None):
-        """Not currently implemented."""
-        raise NotImplementedError
+    @wrap_jit(static_argnames=("discontinuity", "extrapolate", "size"))
+    def solve(
+        self,
+        y: Real[ArrayLike, "..."] = 0.0,
+        discontinuity: bool = True,
+        extrapolate: bool | str | None = None,
+        size: int | None = None,
+        fill_value: Real[ArrayLike, ""] = jnp.nan,
+    ) -> Float[Array, "... size"]:
+        """Find real solutions of the equation ``pp(x) == y``.
 
-    def roots(self, discontinuity=True, extrapolate=None):
-        """Not currently implemented."""
-        raise NotImplementedError
+        Parameters
+        ----------
+        y : float or array_like, optional
+            Right-hand side. Default is zero. If an array, it must be broadcastable
+            to ``c.shape[2:]``.
+        discontinuity : bool, optional
+            Whether to report sign changes across discontinuities at
+            breakpoints as roots.
+        extrapolate : {bool, 'periodic', None}, optional
+            If bool, determines whether to return roots from the polynomial
+            extrapolated based on first and last intervals, 'periodic' works
+            the same as False. If None (default), use `self.extrapolate`.
+        size : int, optional
+            Length of the returned array of roots. If fewer roots exist, the result
+            is padded with ``fill_value``. If more exist, only the ``size`` smallest
+            are returned. Default is the largest number of roots that can be
+            reported for a piecewise polynomial of this order and number of
+            intervals.
+        fill_value : float, optional
+            Value used to pad the result when fewer than ``size`` roots exist.
+            Default is nan.
+
+        Returns
+        -------
+        roots : ndarray, shape(..., size)
+            Roots of the polynomial(s) in increasing order, followed by
+            ``fill_value`` padding. Leading dimensions are ``c.shape[2:]``.
+
+        Notes
+        -----
+        This routine works only on real-valued polynomials.
+
+        If the piecewise polynomial contains sections that are
+        identically equal to ``y``, the root list will contain the start point
+        of the corresponding interval, followed by a ``nan`` value.
+
+        If the polynomial is discontinuous across a breakpoint, and
+        there is a sign change across the breakpoint, this is reported
+        if the ``discontinuity`` parameter is True.
+
+        Roots are differentiable with respect to the coefficients, breakpoints
+        and ``y``, except for roots reported at discontinuities or identically
+        zero sections.
+        """
+        errorif(
+            jnp.iscomplexobj(self.c),
+            ValueError,
+            "Root finding is only for real-valued polynomials",
+        )
+        if extrapolate is None:
+            extrapolate = self.extrapolate
+        extrapolate = False if extrapolate == "periodic" else bool(extrapolate)
+
+        k, m = self.c.shape[:2]
+        if size is None:
+            # each interval gives at most k-1 roots or a (start, nan) pair for
+            # identically zero sections, plus one root at a discontinuity.
+            size = m * (max(k - 1, 2) + 1)
+
+        c = self.c.reshape(k, m, -1)
+        y = jnp.broadcast_to(asarray_inexact(y), self.c.shape[2:]).reshape(-1)
+        fun = lambda c, y: _real_roots(
+            c, self.x, y, discontinuity, extrapolate, size, fill_value
+        )
+        r = jax.vmap(fun, in_axes=(2, 0))(c, y)
+        return r.reshape(self.c.shape[2:] + (size,))
+
+    def roots(
+        self,
+        discontinuity: bool = True,
+        extrapolate: bool | str | None = None,
+        size: int | None = None,
+        fill_value: Real[ArrayLike, ""] = jnp.nan,
+    ) -> Float[Array, "... size"]:
+        """Find real roots of the piecewise polynomial.
+
+        Parameters
+        ----------
+        discontinuity : bool, optional
+            Whether to report sign changes across discontinuities at
+            breakpoints as roots.
+        extrapolate : {bool, 'periodic', None}, optional
+            If bool, determines whether to return roots from the polynomial
+            extrapolated based on first and last intervals, 'periodic' works
+            the same as False. If None (default), use `self.extrapolate`.
+        size : int, optional
+            Length of the returned array of roots. If fewer roots exist, the result
+            is padded with ``fill_value``. If more exist, only the ``size`` smallest
+            are returned. Default is the largest number of roots that can be
+            reported for a piecewise polynomial of this order and number of
+            intervals.
+        fill_value : float, optional
+            Value used to pad the result when fewer than ``size`` roots exist.
+            Default is nan.
+
+        Returns
+        -------
+        roots : ndarray, shape(..., size)
+            Roots of the polynomial(s) in increasing order, followed by
+            ``fill_value`` padding. Leading dimensions are ``c.shape[2:]``.
+
+        See Also
+        --------
+        PPoly.solve
+        """
+        return self.solve(0.0, discontinuity, extrapolate, size, fill_value)
 
     def extend(self, c, x, right=True):
         """Not currently implemented."""
@@ -439,6 +549,146 @@ class PPoly(eqx.Module):
     def from_bernstein_basis(cls, bp, extrapolate=None):
         """Not currently implemented."""
         raise NotImplementedError
+
+
+def _poly_real_roots(p: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Real roots of a polynomial, padded to a fixed length.
+
+    Parameters
+    ----------
+    p : ndarray, shape(k,)
+        Polynomial coefficients, highest order first. Must not be identically zero.
+
+    Returns
+    -------
+    t : ndarray, shape(k-1,)
+        Candidate roots.
+    valid : ndarray of bool, shape(k-1,)
+        Whether each entry of ``t`` is a real root.
+    """
+    d = p.shape[0] - 1
+    idx = jnp.arange(d)
+    nonzero = p != 0
+    # Leading zero coefficients lower the degree. The monic polynomial of the true
+    # degree goes in the top left block of a fixed size companion matrix, and the
+    # remaining block is diagonal with eigenvalues outside the Cauchy bound on the
+    # roots, so they can be discarded by magnitude.
+    lead_idx = jnp.argmax(nonzero)
+    deg = d - lead_idx
+    lead = jnp.where(nonzero.any(), p[lead_idx], 1.0)
+    b = jnp.take(p, lead_idx + 1 + idx, mode="fill", fill_value=0.0) / lead
+    inblock = idx < deg
+    bound = 1 + jnp.max(jnp.where(inblock, jnp.abs(b), 0.0), initial=0.0)
+    C = jnp.zeros((d, d), dtype=b.dtype)
+    C = C.at[0].set(jnp.where(inblock, -b, 0.0))
+    C = C.at[idx[1:], idx[:-1]].set(jnp.where(inblock[1:], 1.0, 0.0))
+    C = C + jnp.diag(jnp.where(inblock, 0.0, 2 * bound))
+    sg = jax.lax.stop_gradient
+    lam = jnp.linalg.eigvals(sg(C))
+    eps = jnp.finfo(b.dtype).eps
+
+    # Filters on the raw eigenvalues: discard the padding block, and keep one member
+    # of each conjugate pair. Multiple roots are ill conditioned and come back as
+    # clusters of complex eigenvalues with imaginary parts up to about eps**(1/j) for
+    # multiplicity j, so the imaginary part is only a loose prefilter and the
+    # residual below decides whether a candidate is a real root.
+    candidate = (
+        (jnp.abs(lam) <= 1.5 * bound)
+        & (lam.imag >= 0)
+        & (jnp.abs(lam.imag) <= eps**0.25 * sg(bound))
+    )
+
+    # One Newton step refines the root, kept only if it doesn't increase the
+    # residual. This prevents a large step where p' is nearly zero from moving an
+    # accurate eigenvalue away from the root.
+    ps, dps = sg(p), sg(jnp.polyder(p))
+    t0 = lam.real
+    f0 = jnp.polyval(ps, t0)
+    df0 = jnp.polyval(dps, t0)
+    t1 = t0 - f0 / jnp.where(df0 == 0, 1.0, df0)
+    f1 = jnp.polyval(ps, t1)
+    accept = (df0 != 0) & (jnp.abs(f1) <= jnp.abs(f0))
+    t = jnp.where(accept, t1, t0)
+    f = jnp.where(accept, f1, f0)
+
+    # A real root has a residual within the rounding error of evaluating p near it,
+    # while the real part of a complex pair with imaginary part delta leaves a
+    # residual of order p'' * delta**2.
+    tol = 4 * p.shape[0] * eps * jnp.polyval(jnp.abs(ps), jnp.abs(t))
+    valid = candidate & (jnp.abs(f) <= tol)
+
+    # The eigenvalues carry no gradient, so the gradient comes from a Newton step
+    # with zero value, which gives the implicit derivative -(dp/dtheta) / p'(t) at a
+    # simple root.
+    fg = jnp.polyval(p, t)
+    dfg = jnp.polyval(jnp.polyder(p), t)
+    step = jnp.where(dfg == 0, 0.0, fg / jnp.where(dfg == 0, 1.0, dfg))
+    t = t - (step - sg(step))
+    return t, valid
+
+
+def _real_roots(
+    c: jax.Array,
+    x: jax.Array,
+    y: jax.Array,
+    discontinuity: bool,
+    extrapolate: bool,
+    size: int,
+    fill_value: Real[ArrayLike, ""],
+) -> jax.Array:
+    """Sorted real roots of a single piecewise polynomial, padded to ``size``."""
+    k, m = c.shape
+    c = c.at[-1].add(-y)
+    dx = jnp.diff(x)
+    idx = jnp.arange(m)
+
+    disc = jnp.zeros(m, dtype=bool)
+    if discontinuity and m > 1:
+        va = jax.vmap(jnp.polyval, in_axes=(1, 0))(c[:, :-1], dx[:-1])
+        vb = c[-1, 1:]
+        disc = disc.at[1:].set(((va < 0) & (vb > 0)) | ((va > 0) & (vb < 0)))
+    zero = jnp.all(c == 0, axis=0)
+
+    # Each interval fills slots [discontinuity, zero section start, nan marker,
+    # roots...] in increasing order, so the flattened slots are sorted too.
+    x0 = x[:-1, None]
+    vals = [x0, x0, jnp.full_like(x0, jnp.nan)]
+    valid = [disc[:, None], zero[:, None], zero[:, None]]
+    if k > 1:
+        t, tvalid = jax.vmap(_poly_real_roots, in_axes=1)(
+            jnp.where(zero, 1.0, c)  # avoid nans from all zero coefficients
+        )
+        r = t + x0
+        lo_ok = r >= x0
+        hi_ok = r <= x[1:, None]
+        if extrapolate:
+            lo_ok = lo_ok | (idx == 0)[:, None]
+            hi_ok = hi_ok | (idx == m - 1)[:, None]
+        tvalid = tvalid & lo_ok & hi_ok & ~zero[:, None]
+        key = jnp.where(tvalid, jax.lax.stop_gradient(r), jnp.inf)
+        order = jnp.argsort(key, axis=1)
+        vals.append(jnp.take_along_axis(r, order, axis=1))
+        valid.append(jnp.take_along_axis(tvalid, order, axis=1))
+    vals = jnp.concatenate(vals, axis=1).flatten()
+    valid = jnp.concatenate(valid, axis=1).flatten()
+    marker = jnp.zeros((m, vals.size // m), dtype=bool).at[:, 2].set(True).flatten()
+
+    # Compact the valid entries, then drop repeats of the previous root, such as a
+    # root on a breakpoint found in both neighboring intervals. A nan marker is kept
+    # only if the zero section start before it is kept.
+    order = jnp.argsort(~valid, stable=True)
+    vals, valid, marker = vals[order], valid[order], marker[order]
+    prev = jnp.concatenate([jnp.full_like(vals[:1], jnp.nan), vals[:-1]])
+    keep = valid & (vals != prev)
+    keep = jnp.where(marker, jnp.roll(keep, 1), keep)
+
+    order = jnp.argsort(~keep, stable=True)
+    vals, keep = vals[order], keep[order]
+    if size > vals.size:
+        pad = size - vals.size
+        vals = jnp.concatenate([vals, jnp.full(pad, jnp.nan, dtype=vals.dtype)])
+        keep = jnp.concatenate([keep, jnp.zeros(pad, dtype=bool)])
+    return jnp.where(keep[:size], vals[:size], fill_value)
 
 
 def prepare_input(x, y, axis, dydx=None, check=True):

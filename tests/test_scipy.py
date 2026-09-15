@@ -38,6 +38,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import io
 import warnings
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.interpolate
@@ -565,6 +567,83 @@ class TestPPoly:
             assert pp(x1).shape == ()
             assert pp_d(x1).shape == ()
             assert pp_i(x1).shape == ()
+
+    def test_roots_special_cases(self):
+        def nonfill(r, n):
+            # roots come first, padding after
+            assert_(np.isnan(r[n:]).all())
+            return r[:n]
+
+        # identically zero sections, also for solve with a constant section
+        c = np.array([[-1, 0.25], [0, 0], [-1, 0.25]]).T
+        x = np.array([0, 0.4, 0.6, 1.0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(), 4), [0.25, 0.4, np.nan, 0.85])
+        c1 = c.copy().astype(float)
+        c1[1, :] += 2.0
+        assert_array_equal(
+            nonfill(PPoly(c1, x).solve(2.0), 4), [0.25, 0.4, np.nan, 0.85]
+        )
+
+        # root repeated in neighboring sections is reported once
+        c = np.array([[1, 0, -1], [-1, 0, 0]]).T
+        x = np.array([-1, 0, 1])
+        assert_array_equal(nonfill(PPoly(c, x).roots(), 2), [-2, 0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(extrapolate=False), 1), [0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(extrapolate="periodic"), 1), [0])
+
+        # sign change across a discontinuity
+        c = np.array([[1.0], [-1.0]]).T
+        pp = PPoly(c, np.array([0, 1, 2]))
+        assert_array_equal(nonfill(pp.roots(), 1), [1.0])
+        assert_(np.isnan(pp.roots(discontinuity=False)).all())
+
+        # double root, leading zero coefficients, constant polynomial
+        pp = PPoly(np.array([[1, -1, 0.25]]).T, np.array([0, 1]))
+        assert_allclose(nonfill(pp.roots(), 1), [0.5], atol=1e-7)
+        pp = PPoly(np.array([[0, 0, 1, -0.5]]).T, np.array([0, 1]))
+        assert_allclose(nonfill(pp.roots(), 1), [0.5])
+        pp = PPoly(np.array([[1.0, -1.0]]), np.array([0, 1, 2]))
+        assert_array_equal(nonfill(pp.roots(), 1), [1.0])
+
+        with pytest.raises(ValueError):
+            PPoly(np.array([[1j, 1]]).T, np.array([0, 1])).roots()
+
+    def test_roots_vs_scipy(self):
+        rng = np.random.default_rng(1234)
+        m = 6
+        x = np.sort(rng.uniform(-2, 2, m + 1))
+        for k in [1, 2, 4, 6]:
+            c = rng.normal(size=(k, m, 3))
+            y = rng.normal(size=3)
+            for extrapolate in [True, False]:
+                r = PPoly(c, x).solve(y, extrapolate=extrapolate)
+                assert r.shape == (3, m * (max(k - 1, 2) + 1))
+                for i in range(3):
+                    r_scipy = scipy.interpolate.PPoly(c[..., i], x).solve(
+                        y[i], extrapolate=extrapolate
+                    )
+                    n = r_scipy.size
+                    assert_(np.isnan(r[i, n:]).all())
+                    assert_allclose(r[i, :n], np.sort(r_scipy), atol=1e-10)
+
+    def test_roots_size_jit_grad(self):
+        # (x - 0.5) * (x - 1.5) * (x - 2.5) as a cubic spline on [0, 3]
+        xk = np.linspace(0, 3, 4)
+        pp = CubicSpline(xk, (xk - 0.5) * (xk - 1.5) * (xk - 2.5))
+        assert_allclose(pp.roots(size=5, fill_value=-1.0), [0.5, 1.5, 2.5, -1, -1])
+        assert_allclose(pp.roots(size=2), [0.5, 1.5])
+
+        # derivative of a root with respect to the data is -(dp/dtheta) / p'(root)
+        def root(a, b):
+            c = jnp.stack([jnp.ones_like(a), a, b])[:, None]
+            spline = PPoly(c, np.array([0.0, 4.0]), check=False)
+            return spline.roots(size=2, extrapolate=False)[0]
+
+        a, b = -3.0, 2.0  # t^2 - 3t + 2 = (t - 1)(t - 2)
+        assert_allclose(jax.jit(root)(a, b), 1.0)
+        g = jax.jit(jax.grad(root, argnums=(0, 1)))(a, b)
+        dp = 2 * 1.0 + a  # p'(1)
+        assert_allclose(g, (-1.0 / dp, -1.0 / dp))
 
 
 def _ppoly_eval_1(c, x, xps):
