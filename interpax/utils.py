@@ -1,7 +1,6 @@
 """Util functions for interpax."""
 
 import functools
-import warnings
 from typing import Any
 
 import jax
@@ -27,12 +26,6 @@ def errorif(cond: bool | jax.Array, err: type[Exception] = ValueError, msg: str 
     """
     if cond:
         raise err(msg)
-
-
-def warnif(cond: bool | jax.Array, err: type[Warning] = UserWarning, msg: str = ""):
-    """Throw a warning if condition is met."""
-    if cond:
-        warnings.warn(msg, err)
 
 
 def asarray_inexact(x: Num[Arrayish, "..."]) -> Inexact[Array, "..."]:

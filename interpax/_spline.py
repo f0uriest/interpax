@@ -24,9 +24,7 @@ CUBIC_METHODS = (
     "monotonic-0",
 )
 OTHER_METHODS = ("nearest", "linear")
-METHODS_1D = CUBIC_METHODS + OTHER_METHODS
-METHODS_2D = CUBIC_METHODS + OTHER_METHODS
-METHODS_3D = CUBIC_METHODS + OTHER_METHODS
+METHODS = CUBIC_METHODS + OTHER_METHODS
 
 
 class AbstractInterpolator(eqx.Module):
@@ -107,7 +105,7 @@ class Interpolator1D(AbstractInterpolator):
             ValueError,
             "x and f must be arrays of equal length",
         )
-        errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
+        errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
         self.x = x
         self.f = f
@@ -224,7 +222,7 @@ class Interpolator2D(AbstractInterpolator):
             ValueError,
             "y and f must be arrays of equal length",
         )
-        errorif(method not in METHODS_2D, ValueError, f"unknown method {method}")
+        errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
         self.x = x
         self.y = y
@@ -358,7 +356,7 @@ class Interpolator3D(AbstractInterpolator):
             ValueError,
             "z and f must be arrays of equal length",
         )
-        errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
+        errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
         fx = kwargs.pop("fx", None)
         fy = kwargs.pop("fy", None)
@@ -518,7 +516,7 @@ def interp1d(
         ValueError,
         "x and f must be arrays of equal length",
     )
-    errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
+    errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
     lowx, highx = _parse_extrap(extrap, 1)
 
@@ -686,7 +684,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         ValueError,
         "y and f must be arrays of equal length",
     )
-    errorif(method not in METHODS_2D, ValueError, f"unknown method {method}")
+    errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
     periodx, periody = _parse_ndarg(period, 2)
     derivative_x, derivative_y = _parse_ndarg(derivative, 2)
@@ -899,7 +897,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         ValueError,
         "z and f must be arrays of equal length",
     )
-    errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
+    errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
     xq, yq, zq = jnp.broadcast_arrays(xq, yq, zq)
     outshape = xq.shape + f.shape[3:]
@@ -1157,7 +1155,7 @@ def _parse_ndarg(arg: Any, n: int) -> Any | tuple:
     except TypeError:
         arg = tuple(arg for _ in range(n))
         k = n
-    assert k == n, "got too many args"
+    errorif(k != n, ValueError, f"expected {n} values, got {k}")
     return arg
 
 

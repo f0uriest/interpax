@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike, Inexact, Num
 
-from .utils import asarray_inexact, wrap_jit
+from .utils import asarray_inexact, errorif, wrap_jit
 
 
 @wrap_jit(static_argnames=["n"])
@@ -78,6 +78,11 @@ def fft_interp2d(
     fi : ndarray, shape(n1, n2, ..., len(sx))
         Interpolated (and possibly shifted) data points
     """
+    errorif(
+        (sx is None) != (sy is None),
+        ValueError,
+        "sx and sy must both be provided or both be None",
+    )
     f = asarray_inexact(f)
     c = jnp.fft.ifft2(f, axes=(0, 1))
     nx, ny = c.shape[:2]

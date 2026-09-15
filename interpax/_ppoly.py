@@ -62,8 +62,7 @@ class PPoly(eqx.Module):
     c : ndarray, shape (k, m, ...)
         Polynomial coefficients, order `k` and `m` intervals.
     x : ndarray, shape (m+1,)
-        Polynomial breakpoints. Must be sorted in either increasing or
-        decreasing order.
+        Polynomial breakpoints. Must be sorted in increasing order.
     extrapolate : bool or 'periodic', optional
         If bool, determines whether to extrapolate to out-of-bounds points
         based on first and last intervals, or to return NaNs. If 'periodic',
@@ -232,8 +231,6 @@ class PPoly(eqx.Module):
             x = self.x[0] + (x - self.x[0]) % (self.x[-1] - self.x[0])
             extrapolate = False
 
-        # TODO: implement extrap
-
         i = jnp.clip(jnp.searchsorted(self.x, x, side="right"), 1, len(self.x) - 1)
 
         t = x - self.x[i - 1]
@@ -327,16 +324,13 @@ class PPoly(eqx.Module):
         if nu <= 0:
             return self.derivative(-nu)
 
-        if nu == 0:
-            c2 = self.c.copy()
-        else:
-            c2 = self.c.copy()
-            for _ in range(nu):
-                c2 = jnp.vectorize(jnp.polyint, signature="(n)->(m)")(c2.T).T
-                # need to patch up continuity
-                dx = jnp.diff(self.x)
-                z = jnp.vectorize(jnp.polyval, signature="(n),()->()")(c2.T, dx).T
-                c2 = c2.at[-1, 1:].add(jnp.cumsum(z, axis=self.axis)[:-1])
+        c2 = self.c.copy()
+        for _ in range(nu):
+            c2 = jnp.vectorize(jnp.polyint, signature="(n)->(m)")(c2.T).T
+            # need to patch up continuity
+            dx = jnp.diff(self.x)
+            z = jnp.vectorize(jnp.polyval, signature="(n),()->()")(c2.T, dx).T
+            c2 = c2.at[-1, 1:].add(jnp.cumsum(z, axis=self.axis)[:-1])
 
         if self.extrapolate == "periodic":
             extrapolate = False
