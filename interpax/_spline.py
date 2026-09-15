@@ -1,7 +1,7 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
 from collections import OrderedDict
-from typing import Any, Union
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -40,8 +40,8 @@ class AbstractInterpolator(eqx.Module):
     f: eqx.AbstractVar[Inexact[Array, "..."]]  # function values to interpolate
     derivs: eqx.AbstractVar[dict[str, Inexact[Array, "..."]]]
     method: str = eqx.field(static=True)
-    extrap: eqx.AbstractVar[Union[bool, float, tuple]]
-    period: eqx.AbstractVar[Union[None, float, tuple]]
+    extrap: eqx.AbstractVar[bool | float | tuple]
+    period: eqx.AbstractVar[None | float | tuple]
     axis: eqx.AbstractVar[int]
 
 
@@ -85,8 +85,8 @@ class Interpolator1D(AbstractInterpolator):
     f: Inexact[Array, " Nx ..."]
     derivs: dict
     method: str = eqx.field(static=True)
-    extrap: Union[bool, float, tuple]
-    period: Union[None, float]
+    extrap: bool | float | tuple
+    period: None | float
     axis: int
 
     def __init__(
@@ -94,8 +94,8 @@ class Interpolator1D(AbstractInterpolator):
         x: Real[ArrayLike, " Nx"],
         f: Num[ArrayLike, " Nx ..."],
         method: str = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float] = None,
+        extrap: bool | float | tuple = False,
+        period: None | float = None,
         **kwargs,
     ) -> None:
         x, f = map(asarray_inexact, (x, f))
@@ -194,8 +194,8 @@ class Interpolator2D(AbstractInterpolator):
     f: Inexact[Array, " Nx Ny ..."]
     derivs: dict
     method: str = eqx.field(static=True)
-    extrap: Union[bool, float, tuple]
-    period: Union[None, float, tuple]
+    extrap: bool | float | tuple
+    period: None | float | tuple
     axis: int
 
     def __init__(
@@ -204,8 +204,8 @@ class Interpolator2D(AbstractInterpolator):
         y: Real[ArrayLike, " Ny"],
         f: Num[ArrayLike, " Nx Ny ..."],
         method: str = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float, tuple] = None,
+        extrap: bool | float | tuple = False,
+        period: None | float | tuple = None,
         **kwargs,
     ):
         x, y, f = map(asarray_inexact, (x, y, f))
@@ -325,8 +325,8 @@ class Interpolator3D(AbstractInterpolator):
     f: Inexact[Array, " Nx Ny Nz ..."]
     derivs: dict
     method: str = eqx.field(static=True)
-    extrap: Union[bool, float, tuple]
-    period: Union[None, float, tuple]
+    extrap: bool | float | tuple
+    period: None | float | tuple
     axis: int
 
     def __init__(
@@ -336,8 +336,8 @@ class Interpolator3D(AbstractInterpolator):
         z: Real[ArrayLike, " Nz"],
         f: Num[ArrayLike, " Nx Ny Nz ..."],
         method: str = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float, tuple] = None,
+        extrap: bool | float | tuple = False,
+        period: None | float | tuple = None,
         **kwargs,
     ):
         x, y, z, f = map(asarray_inexact, (x, y, z, f))
@@ -448,8 +448,8 @@ def interp1d(
     f: Num[ArrayLike, "Nx ..."],
     method: str = "cubic",
     derivative: int = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float] = None,
+    extrap: bool | float | tuple = False,
+    period: None | float = None,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 1d function.
@@ -600,9 +600,9 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     y: Real[ArrayLike, " Ny"],
     f: Num[ArrayLike, "Nx Ny ..."],
     method: str = "cubic",
-    derivative: Union[int, tuple] = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float, tuple] = None,
+    derivative: int | tuple = 0,
+    extrap: bool | float | tuple = False,
+    period: None | float | tuple = None,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 2d function.
@@ -815,9 +815,9 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     z: Real[ArrayLike, " Nz"],
     f: Num[ArrayLike, "Nx Ny Nz ..."],
     method: str = "cubic",
-    derivative: Union[int, tuple] = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float, tuple] = None,
+    derivative: int | tuple = 0,
+    extrap: bool | float | tuple = False,
+    period: None | float | tuple = None,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 3d function.
@@ -1151,7 +1151,7 @@ def _get_t_der(t: jax.Array, derivative: int, dxi: jax.Array):
     return jax.lax.switch(derivative, [d0, d1, d2, d3, d4])
 
 
-def _parse_ndarg(arg: Any, n: int) -> Union[Any, tuple]:
+def _parse_ndarg(arg: Any, n: int) -> Any | tuple:
     try:
         k = len(arg)
     except TypeError:
@@ -1182,18 +1182,18 @@ def _extrap(
     xq: jax.Array,
     fq: jax.Array,
     x: jax.Array,
-    lo: Union[bool, float],
-    hi: Union[bool, float],
+    lo: bool | float,
+    hi: bool | float,
 ):
     """Clamp or extrapolate values outside bounds."""
 
-    def loclip(fq: jax.Array, lo: Union[bool, float]):
+    def loclip(fq: jax.Array, lo: bool | float):
         # lo is either False (no extrapolation) or a fixed value to fill in
         if isbool(lo):
             lo = jnp.nan
         return jnp.where(xq < x[0], lo, fq.T).T
 
-    def hiclip(fq: jax.Array, hi: Union[bool, float]):
+    def hiclip(fq: jax.Array, hi: bool | float):
         # hi is either False (no extrapolation) or a fixed value to fill in
         if isbool(hi):
             hi = jnp.nan

@@ -149,9 +149,8 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
             dtype = jnp.promote_types(dtype, deriv_value.dtype)
             if deriv_value.shape != expected_deriv_shape:
                 raise ValueError(
-                    "`deriv_value` shape {} is not the expected one {}.".format(
-                        deriv_value.shape, expected_deriv_shape
-                    )
+                    f"`deriv_value` shape {deriv_value.shape} is not the expected one "
+                    f"{expected_deriv_shape}."
                 )
             validated_bc.append((deriv_order, deriv_value))
     return validated_bc, dtype

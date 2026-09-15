@@ -1,5 +1,3 @@
-from typing import Optional
-
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike, Inexact, Num
@@ -11,7 +9,7 @@ from .utils import asarray_inexact, wrap_jit
 def fft_interp1d(
     f: Num[ArrayLike, "nx ..."],
     n: int,
-    sx: Optional[Num[ArrayLike, " s"]] = None,
+    sx: Num[ArrayLike, " s"] | None = None,
     dx: float = 1.0,
 ) -> Inexact[Array, "n ... s"]:
     """Interpolation of a 1d periodic function via FFT.
@@ -56,8 +54,8 @@ def fft_interp2d(
     f: Num[ArrayLike, "nx ny ..."],
     n1: int,
     n2: int,
-    sx: Optional[Num[ArrayLike, " s"]] = None,
-    sy: Optional[Num[ArrayLike, " s"]] = None,
+    sx: Num[ArrayLike, " s"] | None = None,
+    sy: Num[ArrayLike, " s"] | None = None,
     dx: float = 1.0,
     dy: float = 1.0,
 ) -> Inexact[Array, "n1 n2 ... s"]:

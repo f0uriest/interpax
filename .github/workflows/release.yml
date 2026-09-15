@@ -22,7 +22,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements-dev.txt
+        pip install -e ".[dev]"
     - name: Build package
       run: python -m build --sdist --wheel
     - name: Publish package

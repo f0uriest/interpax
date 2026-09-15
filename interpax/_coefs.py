@@ -1,6 +1,6 @@
 """Matrices/tensors for getting spline coefficients from derivatives."""
 
-# flake8: noqa: E501
+# ruff: noqa: E501
 
 import numpy as np
 

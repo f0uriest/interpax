@@ -35,7 +35,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-from typing import Iterable, Optional, Union
+from collections.abc import Iterable
 
 import equinox as eqx
 import jax
@@ -82,14 +82,14 @@ class PPoly(eqx.Module):
 
     _c: Inexact[Array, "k m ..."]
     _x: Float[Array, " m+1"]
-    _extrapolate: Union[bool, str] = eqx.field(static=True)
+    _extrapolate: bool | str = eqx.field(static=True)
     _axis: int = eqx.field(static=True)
 
     def __init__(
         self,
         c: Num[ArrayLike, "k m ..."],
         x: Real[ArrayLike, " m+1"],
-        extrapolate: Optional[Union[bool, str]] = None,
+        extrapolate: bool | str | None = None,
         axis: int = 0,
         check: bool = True,
     ) -> None:
@@ -154,7 +154,7 @@ class PPoly(eqx.Module):
         return self._x
 
     @property
-    def extrapolate(self) -> Union[bool, str]:
+    def extrapolate(self) -> bool | str:
         """Whether to extrapolate beyond domain of known values."""
         return self._extrapolate
 
@@ -168,7 +168,7 @@ class PPoly(eqx.Module):
         cls,
         c: Inexact[ArrayLike, "k m ..."],
         x: Real[ArrayLike, " m+1"],
-        extrapolate: Optional[Union[bool, str]] = None,
+        extrapolate: bool | str | None = None,
         axis: int = 0,
     ) -> "PPoly":
         """Construct the piecewise polynomial without making checks.
@@ -190,7 +190,7 @@ class PPoly(eqx.Module):
         self,
         x: Num[ArrayLike, "..."],
         nu: int = 0,
-        extrapolate: Optional[Union[bool, str]] = None,
+        extrapolate: bool | str | None = None,
     ) -> Inexact[Array, "..."]:
         """Evaluate the piecewise polynomial or its derivative.
 
@@ -346,7 +346,7 @@ class PPoly(eqx.Module):
         return self.construct_fast(c2, self.x, extrapolate, self.axis)
 
     def integrate(
-        self, a: Real, b: Real, extrapolate: Optional[Union[bool, str]] = None
+        self, a: Real, b: Real, extrapolate: bool | str | None = None
     ) -> Inexact[Array, ""]:
         """Compute a definite integral over a piecewise polynomial.
 
@@ -543,7 +543,7 @@ class CubicHermiteSpline(PPoly):
         y: Num[ArrayLike, " n ..."],
         dydx: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        extrapolate: Optional[Union[bool, str]] = None,
+        extrapolate: bool | str | None = None,
         check: bool = True,
     ) -> None:
         if extrapolate is None:
@@ -644,7 +644,7 @@ class PchipInterpolator(CubicHermiteSpline):
         x: Real[ArrayLike, " n"],
         y: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        extrapolate: Optional[Union[bool, str]] = None,
+        extrapolate: bool | str | None = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -702,7 +702,7 @@ class Akima1DInterpolator(CubicHermiteSpline):
         x: Real[ArrayLike, " n"],
         y: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        extrapolate: Optional[Union[bool, str]] = None,
+        extrapolate: bool | str | None = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
@@ -800,8 +800,8 @@ class CubicSpline(CubicHermiteSpline):
         x: Real[ArrayLike, " n"],
         y: Num[ArrayLike, " n ..."],
         axis: int = 0,
-        bc_type: Union[str, Iterable] = "not-a-knot",
-        extrapolate: Optional[Union[bool, str]] = None,
+        bc_type: str | Iterable = "not-a-knot",
+        extrapolate: bool | str | None = None,
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)

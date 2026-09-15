@@ -285,9 +285,8 @@ class TestInterp3D:
         xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
 
         if jnp.iscomplexobj(dtype):
-            f = (
-                lambda x, y, z: jnp.sin(x) * jnp.cos(y) * z**2
-                + 1j * jnp.sin(x) * jnp.cos(y) * z**2
+            f = lambda x, y, z: (
+                jnp.sin(x) * jnp.cos(y) * z**2 + 1j * jnp.sin(x) * jnp.cos(y) * z**2
             )
         else:
             f = lambda x, y, z: jnp.sin(x) * jnp.cos(y) * z**2
@@ -551,7 +550,6 @@ class TestAD:
         fp = f(xp)
 
         for method in ["cubic", "cubic2", "cardinal", "monotonic"]:
-
             interp1 = lambda xp: interp1d(x, xp, fp, method=method)
             interp2 = lambda xp: Interpolator1D(xp, fp, method=method)(x)
 
@@ -584,7 +582,6 @@ class TestAD:
         fp = f(xxp, yyp)
 
         for method in ["cubic", "cubic2", "cardinal"]:
-
             interp1 = lambda xp: interp2d(x, y, xp, yp, fp, method=method)
             interp2 = lambda xp: Interpolator2D(xp, yp, fp, method=method)(x, y)
 
@@ -619,7 +616,6 @@ class TestAD:
         fp = f(xxp, yyp, zzp)
 
         for method in ["cubic", "cubic2", "cardinal"]:
-
             interp1 = lambda xp: interp3d(x, y, z, xp, yp, zp, fp, method=method)
             interp2 = lambda xp: Interpolator3D(xp, yp, zp, fp, method=method)(x, y, z)
 

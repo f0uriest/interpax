@@ -257,7 +257,7 @@ class TestPPolyCommon:
         # we expect 0 <= axis < c.ndim-1; raise otherwise
         for axis in (-1, 4, 5, 6):
             for cls in (PPoly,):
-                assert_raises(ValueError, cls, **dict(c=c, x=x, axis=axis))
+                assert_raises(ValueError, cls, c=c, x=x, axis=axis)
 
 
 class TestPolySubclassing:
@@ -391,7 +391,7 @@ class TestPPoly:
 
         xi = np.linspace(0, 1, 200)
         for dx in range(0, 10):
-            assert_allclose(pp(xi, dx), pp.derivative(dx)(xi), err_msg="dx=%d" % (dx,))
+            assert_allclose(pp(xi, dx), pp.derivative(dx)(xi), err_msg=f"dx={dx}")
 
     def test_antiderivative_of_constant(self):
         # https://github.com/scipy/scipy/issues/4216
@@ -466,7 +466,7 @@ class TestPPoly:
                     pp2(pp2.x[1:]),
                     pp2(endpoint),
                     rtol=1e-7,
-                    err_msg="dx=%d k=%d" % (dx, k),
+                    err_msg=f"dx={dx} k={k}",
                 )
 
     def test_antiderivative_continuity(self):
@@ -497,7 +497,7 @@ class TestPPoly:
 
         ipp = pp.antiderivative()
         assert_allclose(ig, ipp(b) - ipp(a))
-        assert_allclose(ig, splint(a, b, spl))
+        assert_allclose(ig, np.asarray(splint(a, b, spl)))
 
         a, b = -0.3, 0.9
         ig = pp.integrate(a, b, extrapolate=True)
@@ -783,7 +783,10 @@ class TestCubicSpline:
         else:
             order, value = bc_start
             assert_allclose(
-                S(x[0], order), value, rtol=tol, atol=tol  # pyright: ignore
+                S(x[0], order),
+                value,  # pyright: ignore
+                rtol=tol,
+                atol=tol,
             )
 
         if bc_end == "not-a-knot":
@@ -799,7 +802,10 @@ class TestCubicSpline:
         else:
             order, value = bc_end
             assert_allclose(
-                S(x[-1], order), value, rtol=tol, atol=tol  # pyright: ignore
+                S(x[-1], order),
+                value,  # pyright: ignore
+                rtol=tol,
+                atol=tol,
             )
 
     def check_all_bc(self, x, y, axis):
@@ -862,9 +868,9 @@ class TestCubicSpline:
         xn = np.array([np.nan, 2, 3, 4])
         xo = np.array([2, 1, 3, 4])
         yn = np.array([np.nan, 2, 3, 4])
-        y3 = [1, 2, 3]
-        x1 = [1]
-        y1 = [1]
+        y3 = np.array([1, 2, 3])
+        x1 = np.array([1])
+        y1 = np.array([1])
 
         assert_raises(ValueError, CubicSpline, xc, y)
         assert_raises(ValueError, CubicSpline, xn, y)
@@ -910,5 +916,5 @@ def test_CubicHermiteSpline_error_handling():
     dydx = np.array([1, -1, 2, 3])
     assert_raises(ValueError, CubicHermiteSpline, x, y, dydx)
 
-    dydx_with_nan = [1, 0, np.nan]
+    dydx_with_nan = np.array([1, 0, np.nan])
     assert_raises(ValueError, CubicHermiteSpline, x, y, dydx_with_nan)
