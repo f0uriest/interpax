@@ -844,6 +844,36 @@ class TestCubicSpline:
             Y[1, :, 1] = y[:n] + 3
             self.check_all_bc(x[:n], Y, 1)
 
+    def test_periodic(self):
+        for n in [2, 3, 5]:
+            x = np.linspace(0, 2 * np.pi, n)
+            y = np.cos(x)
+            S = CubicSpline(x, y, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+
+            Y = np.empty((2, n, 2))
+            Y[0, :, 0] = y
+            Y[0, :, 1] = y + 2
+            Y[1, :, 0] = y - 1
+            Y[1, :, 1] = y + 5
+            S = CubicSpline(x, Y, axis=1, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+
+        # non-uniform spacing and complex values, compared against scipy
+        x = np.array([0.0, 0.3, 1.1, 1.5, 2.8, 3.0, 4.2, 5.0])
+        for n in [3, 4, x.size]:
+            xx = x[:n]
+            y = np.cos(2 * np.pi * xx / xx[-1]) + 1j * np.sin(2 * np.pi * xx / xx[-1])
+            y[-1] = y[0]
+            S = CubicSpline(xx, y, bc_type="periodic")
+            S_scipy = scipy.interpolate.CubicSpline(xx, y, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+            assert_allclose(S.c, S_scipy.c, rtol=1e-12, atol=1e-12)
+            assert S.extrapolate == "periodic"
+            xq = np.linspace(-6, 11, 50)
+            assert_allclose(S(xq), S_scipy(xq), rtol=1e-12, atol=1e-12)
+            assert_allclose(S(xq), S(xq + xx[-1] - xx[0]), rtol=1e-12, atol=1e-12)
+
     def test_dtypes(self):
         x = np.array([0, 1, 2, 3], dtype=int)
         y = np.array([-5, 2, 3, 1], dtype=int)
@@ -886,6 +916,7 @@ class TestCubicSpline:
             ((1, 0),),
             (0.0, 0.0),
             "not-a-typo",
+            "periodic",  # y[0] != y[-1]
         ]
 
         for bc_type in wrong_bc:

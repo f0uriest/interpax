@@ -805,5 +805,17 @@ class CubicSpline(CubicHermiteSpline):
         check: bool = True,
     ):
         x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+        periodic = isinstance(bc_type, str) and bc_type == "periodic"
+        if extrapolate is None:
+            extrapolate = "periodic" if periodic else True
+        if check and periodic:
+            errorif(
+                not jnp.allclose(
+                    jnp.take(y, 0, axis), jnp.take(y, -1, axis), rtol=1e-15, atol=1e-15
+                ),
+                ValueError,
+                f"The first and last `y` point along axis {axis} must be identical "
+                "(within machine precision) when bc_type='periodic'.",
+            )
         df = approx_df(x, y, "cubic2", axis, bc_type=bc_type)
         super().__init__(x, y, df, axis=axis, extrapolate=extrapolate, check=check)
