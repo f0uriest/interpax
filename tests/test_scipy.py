@@ -38,6 +38,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import io
 import warnings
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.interpolate
@@ -257,7 +259,7 @@ class TestPPolyCommon:
         # we expect 0 <= axis < c.ndim-1; raise otherwise
         for axis in (-1, 4, 5, 6):
             for cls in (PPoly,):
-                assert_raises(ValueError, cls, **dict(c=c, x=x, axis=axis))
+                assert_raises(ValueError, cls, c=c, x=x, axis=axis)
 
 
 class TestPolySubclassing:
@@ -391,7 +393,7 @@ class TestPPoly:
 
         xi = np.linspace(0, 1, 200)
         for dx in range(0, 10):
-            assert_allclose(pp(xi, dx), pp.derivative(dx)(xi), err_msg="dx=%d" % (dx,))
+            assert_allclose(pp(xi, dx), pp.derivative(dx)(xi), err_msg=f"dx={dx}")
 
     def test_antiderivative_of_constant(self):
         # https://github.com/scipy/scipy/issues/4216
@@ -466,7 +468,7 @@ class TestPPoly:
                     pp2(pp2.x[1:]),
                     pp2(endpoint),
                     rtol=1e-7,
-                    err_msg="dx=%d k=%d" % (dx, k),
+                    err_msg=f"dx={dx} k={k}",
                 )
 
     def test_antiderivative_continuity(self):
@@ -497,7 +499,7 @@ class TestPPoly:
 
         ipp = pp.antiderivative()
         assert_allclose(ig, ipp(b) - ipp(a))
-        assert_allclose(ig, splint(a, b, spl))
+        assert_allclose(ig, np.asarray(splint(a, b, spl)))
 
         a, b = -0.3, 0.9
         ig = pp.integrate(a, b, extrapolate=True)
@@ -565,6 +567,83 @@ class TestPPoly:
             assert pp(x1).shape == ()
             assert pp_d(x1).shape == ()
             assert pp_i(x1).shape == ()
+
+    def test_roots_special_cases(self):
+        def nonfill(r, n):
+            # roots come first, padding after
+            assert_(np.isnan(r[n:]).all())
+            return r[:n]
+
+        # identically zero sections, also for solve with a constant section
+        c = np.array([[-1, 0.25], [0, 0], [-1, 0.25]]).T
+        x = np.array([0, 0.4, 0.6, 1.0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(), 4), [0.25, 0.4, np.nan, 0.85])
+        c1 = c.copy().astype(float)
+        c1[1, :] += 2.0
+        assert_array_equal(
+            nonfill(PPoly(c1, x).solve(2.0), 4), [0.25, 0.4, np.nan, 0.85]
+        )
+
+        # root repeated in neighboring sections is reported once
+        c = np.array([[1, 0, -1], [-1, 0, 0]]).T
+        x = np.array([-1, 0, 1])
+        assert_array_equal(nonfill(PPoly(c, x).roots(), 2), [-2, 0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(extrapolate=False), 1), [0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(extrapolate="periodic"), 1), [0])
+
+        # sign change across a discontinuity
+        c = np.array([[1.0], [-1.0]]).T
+        pp = PPoly(c, np.array([0, 1, 2]))
+        assert_array_equal(nonfill(pp.roots(), 1), [1.0])
+        assert_(np.isnan(pp.roots(discontinuity=False)).all())
+
+        # double root, leading zero coefficients, constant polynomial
+        pp = PPoly(np.array([[1, -1, 0.25]]).T, np.array([0, 1]))
+        assert_allclose(nonfill(pp.roots(), 1), [0.5], atol=1e-7)
+        pp = PPoly(np.array([[0, 0, 1, -0.5]]).T, np.array([0, 1]))
+        assert_allclose(nonfill(pp.roots(), 1), [0.5])
+        pp = PPoly(np.array([[1.0, -1.0]]), np.array([0, 1, 2]))
+        assert_array_equal(nonfill(pp.roots(), 1), [1.0])
+
+        with pytest.raises(ValueError):
+            PPoly(np.array([[1j, 1]]).T, np.array([0, 1])).roots()
+
+    def test_roots_vs_scipy(self):
+        rng = np.random.default_rng(1234)
+        m = 6
+        x = np.sort(rng.uniform(-2, 2, m + 1))
+        for k in [1, 2, 4, 6]:
+            c = rng.normal(size=(k, m, 3))
+            y = rng.normal(size=3)
+            for extrapolate in [True, False]:
+                r = PPoly(c, x).solve(y, extrapolate=extrapolate)
+                assert r.shape == (3, m * (max(k - 1, 2) + 1))
+                for i in range(3):
+                    r_scipy = scipy.interpolate.PPoly(c[..., i], x).solve(
+                        y[i], extrapolate=extrapolate
+                    )
+                    n = r_scipy.size
+                    assert_(np.isnan(r[i, n:]).all())
+                    assert_allclose(r[i, :n], np.sort(r_scipy), atol=1e-10)
+
+    def test_roots_size_jit_grad(self):
+        # (x - 0.5) * (x - 1.5) * (x - 2.5) as a cubic spline on [0, 3]
+        xk = np.linspace(0, 3, 4)
+        pp = CubicSpline(xk, (xk - 0.5) * (xk - 1.5) * (xk - 2.5))
+        assert_allclose(pp.roots(size=5, fill_value=-1.0), [0.5, 1.5, 2.5, -1, -1])
+        assert_allclose(pp.roots(size=2), [0.5, 1.5])
+
+        # derivative of a root with respect to the data is -(dp/dtheta) / p'(root)
+        def root(a, b):
+            c = jnp.stack([jnp.ones_like(a), a, b])[:, None]
+            spline = PPoly(c, np.array([0.0, 4.0]), check=False)
+            return spline.roots(size=2, extrapolate=False)[0]
+
+        a, b = -3.0, 2.0  # t^2 - 3t + 2 = (t - 1)(t - 2)
+        assert_allclose(jax.jit(root)(a, b), 1.0)
+        g = jax.jit(jax.grad(root, argnums=(0, 1)))(a, b)
+        dp = 2 * 1.0 + a  # p'(1)
+        assert_allclose(g, (-1.0 / dp, -1.0 / dp))
 
 
 def _ppoly_eval_1(c, x, xps):
@@ -783,7 +862,10 @@ class TestCubicSpline:
         else:
             order, value = bc_start
             assert_allclose(
-                S(x[0], order), value, rtol=tol, atol=tol  # pyright: ignore
+                S(x[0], order),
+                value,  # pyright: ignore
+                rtol=tol,
+                atol=tol,
             )
 
         if bc_end == "not-a-knot":
@@ -799,7 +881,10 @@ class TestCubicSpline:
         else:
             order, value = bc_end
             assert_allclose(
-                S(x[-1], order), value, rtol=tol, atol=tol  # pyright: ignore
+                S(x[-1], order),
+                value,  # pyright: ignore
+                rtol=tol,
+                atol=tol,
             )
 
     def check_all_bc(self, x, y, axis):
@@ -838,6 +923,36 @@ class TestCubicSpline:
             Y[1, :, 1] = y[:n] + 3
             self.check_all_bc(x[:n], Y, 1)
 
+    def test_periodic(self):
+        for n in [2, 3, 5]:
+            x = np.linspace(0, 2 * np.pi, n)
+            y = np.cos(x)
+            S = CubicSpline(x, y, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+
+            Y = np.empty((2, n, 2))
+            Y[0, :, 0] = y
+            Y[0, :, 1] = y + 2
+            Y[1, :, 0] = y - 1
+            Y[1, :, 1] = y + 5
+            S = CubicSpline(x, Y, axis=1, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+
+        # non-uniform spacing and complex values, compared against scipy
+        x = np.array([0.0, 0.3, 1.1, 1.5, 2.8, 3.0, 4.2, 5.0])
+        for n in [3, 4, x.size]:
+            xx = x[:n]
+            y = np.cos(2 * np.pi * xx / xx[-1]) + 1j * np.sin(2 * np.pi * xx / xx[-1])
+            y[-1] = y[0]
+            S = CubicSpline(xx, y, bc_type="periodic")
+            S_scipy = scipy.interpolate.CubicSpline(xx, y, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+            assert_allclose(S.c, S_scipy.c, rtol=1e-12, atol=1e-12)
+            assert S.extrapolate == "periodic"
+            xq = np.linspace(-6, 11, 50)
+            assert_allclose(S(xq), S_scipy(xq), rtol=1e-12, atol=1e-12)
+            assert_allclose(S(xq), S(xq + xx[-1] - xx[0]), rtol=1e-12, atol=1e-12)
+
     def test_dtypes(self):
         x = np.array([0, 1, 2, 3], dtype=int)
         y = np.array([-5, 2, 3, 1], dtype=int)
@@ -862,9 +977,9 @@ class TestCubicSpline:
         xn = np.array([np.nan, 2, 3, 4])
         xo = np.array([2, 1, 3, 4])
         yn = np.array([np.nan, 2, 3, 4])
-        y3 = [1, 2, 3]
-        x1 = [1]
-        y1 = [1]
+        y3 = np.array([1, 2, 3])
+        x1 = np.array([1])
+        y1 = np.array([1])
 
         assert_raises(ValueError, CubicSpline, xc, y)
         assert_raises(ValueError, CubicSpline, xn, y)
@@ -880,6 +995,7 @@ class TestCubicSpline:
             ((1, 0),),
             (0.0, 0.0),
             "not-a-typo",
+            "periodic",  # y[0] != y[-1]
         ]
 
         for bc_type in wrong_bc:
@@ -910,5 +1026,5 @@ def test_CubicHermiteSpline_error_handling():
     dydx = np.array([1, -1, 2, 3])
     assert_raises(ValueError, CubicHermiteSpline, x, y, dydx)
 
-    dydx_with_nan = [1, 0, np.nan]
+    dydx_with_nan = np.array([1, 0, np.nan])
     assert_raises(ValueError, CubicHermiteSpline, x, y, dydx_with_nan)

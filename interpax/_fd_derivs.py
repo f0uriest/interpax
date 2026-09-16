@@ -103,7 +103,6 @@ def _cubic1(x, f, axis):
 
 def _validate_bc(bc_type, expected_deriv_shape, dtype):
     if isinstance(bc_type, str):
-        errorif(bc_type == "periodic", NotImplementedError)
         bc_type = (bc_type, bc_type)
 
     else:
@@ -124,7 +123,6 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
     validated_bc = []
     for bc in bc_type:
         if isinstance(bc, str):
-            errorif(bc_type == "periodic", NotImplementedError)
             if bc == "clamped":
                 validated_bc.append((1, jnp.zeros(expected_deriv_shape)))
             elif bc == "natural":
@@ -149,9 +147,8 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
             dtype = jnp.promote_types(dtype, deriv_value.dtype)
             if deriv_value.shape != expected_deriv_shape:
                 raise ValueError(
-                    "`deriv_value` shape {} is not the expected one {}.".format(
-                        deriv_value.shape, expected_deriv_shape
-                    )
+                    f"`deriv_value` shape {deriv_value.shape} is not the expected one "
+                    f"{expected_deriv_shape}."
                 )
             validated_bc.append((deriv_order, deriv_value))
     return validated_bc, dtype
@@ -200,6 +197,10 @@ def _cubic2(x, f, axis, bc, dtype):
 
         solve = lambda b: jnp.linalg.solve(A, b)
         fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
+        fx = jnp.moveaxis(fx, 0, axis)
+
+    elif bc[0] == "periodic":
+        fx = _cubic2_periodic(dx, df)
         fx = jnp.moveaxis(fx, 0, axis)
 
     else:
@@ -294,10 +295,61 @@ def _cubic2(x, f, axis, bc, dtype):
 
         A = lx.TridiagonalLinearOperator(diag, lower_diag, upper_diag)
 
-        solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal()).value
+        # throw=False skips lineax's error check, whose host callback can cause a
+        # cache miss on every call under jit. The system is nonsingular by
+        # construction, so there is no failure to report.
+        solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal(), throw=False).value
         fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
         fx = jnp.moveaxis(fx, 0, axis)
     return fx.astype(f.dtype)
+
+
+def _cubic2_periodic(dx, df):
+    # Since f[-1] == f[0], the last knot duplicates the first and there are only
+    # m = n-1 unknown slopes s[0..m-1]. The C2 condition at knot i, with indices
+    # taken mod m, is
+    #   dx[i] * s[i-1] + 2 * (dx[i-1] + dx[i]) * s[i] + dx[i-1] * s[i+1]  # noqa:ERA001
+    #     = 3 * (dx[i] * df[i-1] + dx[i-1] * df[i])                       # noqa:ERA001
+    # which is a cyclic tridiagonal system.
+    m = dx.shape[0]
+    dxr = dx.reshape([m] + [1] * (df.ndim - 1))
+    dx_prev = jnp.roll(dx, 1)
+    dxr_prev = jnp.roll(dxr, 1, axis=0)
+    b = 3 * (dxr * jnp.roll(df, 1, axis=0) + dxr_prev * df)
+
+    if m == 2:
+        # Both rows couple s[0] and s[1] through the same entries, so the system
+        # isn't tridiagonal with distinct corners. Its solution is s[0] == s[1].
+        s = b[:1] / (3 * (dxr[0] + dxr[1]))
+        return jnp.concatenate([s, s, s], axis=0)
+
+    diag = 2 * (dx_prev + dx)
+    lower_diag = dx[1:]  # coefficient of s[i-1] in row i
+    upper_diag = dx_prev[:-1]  # coefficient of s[i+1] in row i
+    corner_top = dx[0]  # coefficient of s[m-1] in row 0
+    corner_bot = dx_prev[-1]  # coefficient of s[0] in row m-1
+
+    # Sherman-Morrison: A = T + u v^T, where T is tridiagonal and u v^T holds the
+    # corner entries. The system is strictly diagonally dominant, so gamma = -diag[0]
+    # keeps T well conditioned.
+    gamma = -diag[0]
+    diag = diag.at[0].add(-gamma)
+    diag = diag.at[-1].add(-corner_bot * corner_top / gamma)
+    u = jnp.zeros(m, dtype=diag.dtype).at[0].set(gamma).at[-1].set(corner_bot)
+    v = jnp.zeros(m, dtype=diag.dtype).at[0].set(1).at[-1].set(corner_top / gamma)
+
+    # see https://github.com/patrick-kidger/lineax/issues/148
+    dtype = jnp.result_type(diag, b)
+    T = lx.TridiagonalLinearOperator(
+        diag.astype(dtype), lower_diag.astype(dtype), upper_diag.astype(dtype)
+    )
+    # throw=False skips lineax's error check, see _cubic2
+    solve = lambda rhs: lx.linear_solve(T, rhs, lx.Tridiagonal(), throw=False).value
+    z = solve(u.astype(dtype))
+    y = jnp.vectorize(solve, signature="(n)->(n)")(b.astype(dtype).T).T
+    coef = jnp.tensordot(v, y, axes=1) / (1 + v @ z)
+    s = y - z.reshape([m] + [1] * (y.ndim - 1)) * coef
+    return jnp.concatenate([s, s[:1]], axis=0)
 
 
 @eqx.filter_jit

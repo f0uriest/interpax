@@ -6,26 +6,80 @@ on:
   workflow_dispatch:
 
 jobs:
-  jax_tests:
-    if: ${{ github.event.label.name == 'test_jax' && github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+  discover_jax_versions:
+    if: >-
+      ${{ github.event.label.name == 'test_jax' &&
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    outputs:
+      jax-versions: ${{ steps.discover.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Read minimum supported JAX version from pyproject.toml
+        id: minimum
+        run: |
+          # Single source for the oldest version we test: the lower bound of the jax
+          # pin in project dependencies. Upper bound is still whatever the latest is on
+          # pypi, we want to test new versions as they come out before bumping
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import re
+          import tomllib
+
+          with open("pyproject.toml", "rb") as f:
+              deps = tomllib.load(f)["project"]["dependencies"]
+
+          # `\b` keeps this from matching the "jaxlib" requirement if one is
+          # ever added alongside "jax".
+          jax = next(d for d in deps if re.match(r"^jax\b", d))
+          match = re.search(r">=\s*([0-9]+(?:\.[0-9]+)*)", jax)
+          if match is None:
+              raise SystemExit(f"no lower bound in jax requirement {jax!r}")
+
+          # normalize to major.minor.patch so the jq comparison below can treat
+          # it as a fixed length list of numbers
+          parts = (match.group(1).split(".") + ["0", "0"])[:3]
+          print(f"version={'.'.join(parts)}")
+          PY
+      - name: Discover available JAX versions from PyPI
+        id: discover
+        run: |
+          # Fetch every stable, non-yanked JAX release >= the minimum we
+          # support from PyPI and emit them as a JSON array for the test matrix
+          # below. Missing versions and any newly released versions are handled
+          # automatically. jaxlib only became pip-installable at 0.4.18, so
+          # older jax cannot get a matching jaxlib here.
+          versions=$(curl -s https://pypi.org/pypi/jax/json | jq -c \
+            --arg min "${{ steps.minimum.outputs.version }}" \
+            '($min | split(".") | map(tonumber)) as $minimum
+             | [.releases | to_entries[]
+              | select(.value | length > 0)
+              | select(.value[0].yanked == false)
+              | .key
+              | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              | select((split(".") | map(tonumber)) >= $minimum)]
+             | sort_by(. | split(".") | map(tonumber))')
+          echo "testing jax >= ${{ steps.minimum.outputs.version }}: ${versions}"
+          echo "versions=${versions}" >> "$GITHUB_OUTPUT"
+
+  jax_tests:
+    needs: discover_jax_versions
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        jax-version: [0.3.0,  0.3.1,  0.3.2,  0.3.3,  0.3.4,  0.3.5,  0.3.6,  0.3.7,
-                      0.3.8,  0.3.9,  0.3.10, 0.3.11, 0.3.12, 0.3.13, 0.3.14, 0.3.15,
-                      0.3.16, 0.3.17, 0.3.19, 0.3.20, 0.3.21, 0.3.22, 0.3.23, 0.3.24,
-                      0.3.25, 0.4.1,  0.4.2,  0.4.3,  0.4.4,  0.4.5,  0.4.6,  0.4.7,
-                      0.4.8,  0.4.9,  0.4.10, 0.4.11, 0.4.12, 0.4.13, 0.4.14, 0.4.15,
-                      0.4.16, 0.4.17, 0.4.18, 0.4.19, 0.4.20, 0.4.21, 0.4.22, 0.4.23,
-                      0.4.24, 0.4.25, 0.4.26, 0.4.27, 0.4.28, 0.4.29, 0.4.30, 0.4.31,
-                      0.4.33, 0.4.34, 0.4.35, 0.4.36, 0.4.37, 0.4.38, 0.5.0,  0.5.1,
-                      0.5.2,  0.5.3,  0.6.0]
-                      # 0.4.32 is not available on PyPI
+        jax-version: ${{ fromJSON(needs.discover_jax_versions.outputs.jax-versions) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Upgrade pip
@@ -33,19 +87,133 @@ jobs:
           python -m pip install --upgrade pip
       - name: Install dependencies with given JAX version
         run: |
-          sed -i '/jax/d' ./requirements.txt
-          sed -i '1i\jax == ${{ matrix.jax-version }}' ./requirements.txt
-          cat ./requirements.txt
-          pip install -r ./requirements-dev.txt
+          pip install -e ".[test]"
+          # override the jax pin from pyproject.toml with the version under test.
+          # pip will warn about the resulting conflict with our declared range;
+          # that is expected, since the point of this job is to probe old versions.
+          # Start from a clean slate so the jaxlib already pulled in by `.[test]`
+          # doesn't linger and get paired with an incompatible jax.
+          pip uninstall -y jax jaxlib
+          pip install "jax == ${{ matrix.jax-version }}"
+          # jaxlib must match the jax version under test. For jax < 0.4.30,
+          # jaxlib is not a base dependency of jax (it only exists in the [cpu]
+          # extra), so a bare `pip install "jax == X"` would leave a mismatched
+          # jaxlib behind. Pin the matching jaxlib, falling back to the [cpu]
+          # extra for versions that only declare jaxlib there.
+          pip install "jaxlib == ${{ matrix.jax-version }}" || \
+            pip install "jax[cpu] == ${{ matrix.jax-version }}"
+          pip list | grep -i "^jax"
       - name: Verify dependencies
         run: |
           python --version
           pip --version
           pip list
       - name: Test with pytest
+        id: test
         run: |
           pwd
           lscpu
           python -m pytest \
             --durations=0 \
             --maxfail=1 \
+      # GitHub does not expose per-cell outcomes of a matrix job in the needs
+      # context; it only provides an aggregate {result, outputs} object. Record
+      # each version's outcome to an artifact instead so the report job can
+      # summarize every version. These steps must run even when the tests fail.
+      - name: Record test result
+        if: ${{ always() }}
+        run: |
+          jq -cn \
+            --arg version "${{ matrix.jax-version }}" \
+            --arg status "${{ job.status }}" \
+            '$ARGS.named' > result.json
+      - name: Upload test result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: jax-result-${{ matrix.jax-version }}
+          path: result.json
+
+  report_jax_results:
+    # `always()` is needed so a failing version still gets reported, but it must
+    # not extend to runs where the tests never happened: every push of an
+    # unrelated label triggers this workflow, and with nothing to summarize this
+    # job would fail and show up as a red check on a PR that never asked for it.
+    if: >-
+      ${{ always() && github.event_name == 'pull_request' &&
+      needs.jax_tests.result != 'skipped' }}
+    needs: jax_tests
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: jax-result-*
+          path: results
+      - name: Summarize per-version results
+        run: |
+          # Each jax_tests matrix cell uploads a jax-result-<version> artifact
+          # containing {"version": ..., "status": ...}. Download them and
+          # render a per-version table.
+          {
+            echo '### JAX version test results'
+            echo ''
+            echo '| Version | Result |'
+            echo '|---|---|'
+            jq -r --slurp '
+              sort_by(.version | split(".") | map(tonumber))[] |
+              "| \(.version) | \(
+                if .status == "success"
+                then ":white_check_mark: passed"
+                else ":x: failed"
+                end
+              ) |"
+            ' results/*/result.json
+            echo ''
+            passed=$(jq --slurp '
+              [.[] | select(.status == "success")] | length
+            ' results/*/result.json)
+            failed=$(jq --slurp '
+              [.[] | select(.status != "success")] | length
+            ' results/*/result.json)
+            echo "Passed: $passed, Failed: $failed"
+          } > summary.md
+          cat summary.md
+      - name: Add or update comment on PR
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            // The workflow can be run several times on one PR (relabeling, or a
+            // manual dispatch after pushing a fix). Tag the report with a hidden
+            // marker so later runs overwrite the stale table in place instead of
+            // stacking up a new comment each time. Only comments written by a bot
+            // are candidates, so quoting the report back doesn't hijack it.
+            const marker = '<!-- jax-version-test-results -->';
+            const summary = fs.readFileSync(
+              process.env.GITHUB_WORKSPACE + '/summary.md', 'utf8'
+            );
+            const body = `${marker}\n${summary}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number },
+            );
+            const existing = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }

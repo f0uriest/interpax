@@ -1,17 +1,16 @@
 """Util functions for interpax."""
 
 import functools
-import warnings
-from typing import Any, Type, Union
+from typing import Any
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Inexact, Num
+from jaxtyping import Array, Inexact
 from numpy.typing import ArrayLike
 
 # jax.typing.ArrayLike and jaxtyping.ArrayLike don't include eg tuples,lists,iterables
 # like np.ArrayLike. This combines all the usual array types
-Arrayish = Union[Array, ArrayLike]
+Arrayish = Array | ArrayLike
 
 
 def isbool(x: Any) -> bool:
@@ -19,9 +18,7 @@ def isbool(x: Any) -> bool:
     return isinstance(x, bool) or (hasattr(x, "dtype") and (x.dtype == bool))
 
 
-def errorif(
-    cond: Union[bool, jax.Array], err: Type[Exception] = ValueError, msg: str = ""
-):
+def errorif(cond: bool | jax.Array, err: type[Exception] = ValueError, msg: str = ""):
     """Raise an error if condition is met.
 
     Similar to assert but allows wider range of Error types, rather than
@@ -31,15 +28,7 @@ def errorif(
         raise err(msg)
 
 
-def warnif(
-    cond: Union[bool, jax.Array], err: Type[Warning] = UserWarning, msg: str = ""
-):
-    """Throw a warning if condition is met."""
-    if cond:
-        warnings.warn(msg, err)
-
-
-def asarray_inexact(x: Num[Arrayish, "..."]) -> Inexact[Array, "..."]:
+def asarray_inexact(x: Arrayish) -> Inexact[Array, "..."]:
     """Convert to jax array with floating point dtype."""
     x = jnp.asarray(x)
     if x.weak_type:  # preserve weakly typed things like scalars

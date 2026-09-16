@@ -1,17 +1,15 @@
-from typing import Optional
-
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike, Inexact, Num
 
-from .utils import asarray_inexact, wrap_jit
+from .utils import asarray_inexact, errorif, wrap_jit
 
 
 @wrap_jit(static_argnames=["n"])
 def fft_interp1d(
     f: Num[ArrayLike, "nx ..."],
     n: int,
-    sx: Optional[Num[ArrayLike, " s"]] = None,
+    sx: Num[ArrayLike, " s"] | None = None,
     dx: float = 1.0,
 ) -> Inexact[Array, "n ... s"]:
     """Interpolation of a 1d periodic function via FFT.
@@ -56,8 +54,8 @@ def fft_interp2d(
     f: Num[ArrayLike, "nx ny ..."],
     n1: int,
     n2: int,
-    sx: Optional[Num[ArrayLike, " s"]] = None,
-    sy: Optional[Num[ArrayLike, " s"]] = None,
+    sx: Num[ArrayLike, " s"] | None = None,
+    sy: Num[ArrayLike, " s"] | None = None,
     dx: float = 1.0,
     dy: float = 1.0,
 ) -> Inexact[Array, "n1 n2 ... s"]:
@@ -80,6 +78,11 @@ def fft_interp2d(
     fi : ndarray, shape(n1, n2, ..., len(sx))
         Interpolated (and possibly shifted) data points
     """
+    errorif(
+        (sx is None) != (sy is None),
+        ValueError,
+        "sx and sy must both be provided or both be None",
+    )
     f = asarray_inexact(f)
     c = jnp.fft.ifft2(f, axes=(0, 1))
     nx, ny = c.shape[:2]

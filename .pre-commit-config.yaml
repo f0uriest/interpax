@@ -1,10 +1,6 @@
 repos:
-  - repo: https://github.com/psf/black
-    rev: 24.10.0
-    hooks:
-      - id: black
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: check-added-large-files
       - id: check-case-conflict
@@ -12,23 +8,16 @@ repos:
       - id: detect-private-key
       - id: end-of-file-fixer
       - id: trailing-whitespace
-  - repo: https://github.com/pycqa/isort
-    rev: 6.0.1
+  # Keep this in sync with the pin in pyproject.toml.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7
     hooks:
-      - id: isort
-        name: isort (python)
-        args: ["--profile", "black"]
-  - repo: https://github.com/PyCQA/flake8
-    rev: "7.1.1"
-    hooks:
-      - id: flake8
-        additional_dependencies: ["flake8-docstrings", "flake8-eradicate", "flake8-isort"]
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.19.0
-    hooks:
-      - id: pyupgrade
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.402
+    rev: v1.1.414
     hooks:
     - id: pyright
-      additional_dependencies: ["jax", "equinox", "pytest"]
+      additional_dependencies:
+        ["equinox", "jax", "jaxtyping", "lineax", "numpy", "pytest", "scipy"]

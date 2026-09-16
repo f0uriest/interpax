@@ -285,9 +285,8 @@ class TestInterp3D:
         xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
 
         if jnp.iscomplexobj(dtype):
-            f = (
-                lambda x, y, z: jnp.sin(x) * jnp.cos(y) * z**2
-                + 1j * jnp.sin(x) * jnp.cos(y) * z**2
+            f = lambda x, y, z: (
+                jnp.sin(x) * jnp.cos(y) * z**2 + 1j * jnp.sin(x) * jnp.cos(y) * z**2
             )
         else:
             f = lambda x, y, z: jnp.sin(x) * jnp.cos(y) * z**2
@@ -551,7 +550,6 @@ class TestAD:
         fp = f(xp)
 
         for method in ["cubic", "cubic2", "cardinal", "monotonic"]:
-
             interp1 = lambda xp: interp1d(x, xp, fp, method=method)
             interp2 = lambda xp: Interpolator1D(xp, fp, method=method)(x)
 
@@ -584,7 +582,6 @@ class TestAD:
         fp = f(xxp, yyp)
 
         for method in ["cubic", "cubic2", "cardinal"]:
-
             interp1 = lambda xp: interp2d(x, y, xp, yp, fp, method=method)
             interp2 = lambda xp: Interpolator2D(xp, yp, fp, method=method)(x, y)
 
@@ -619,7 +616,6 @@ class TestAD:
         fp = f(xxp, yyp, zzp)
 
         for method in ["cubic", "cubic2", "cardinal"]:
-
             interp1 = lambda xp: interp3d(x, y, z, xp, yp, zp, fp, method=method)
             interp2 = lambda xp: Interpolator3D(xp, yp, zp, fp, method=method)(x, y, z)
 
@@ -650,6 +646,44 @@ def test_extrap_float():
     np.testing.assert_allclose(interpol(4.5, 5.3), 1.0)
     np.testing.assert_allclose(interpol(-4.5, 5.3), 0.0)
     np.testing.assert_allclose(interpol(4.5, -5.3), 0.0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "fun, cls, axis, method, period",
+    [
+        (interp1d, Interpolator1D, -1, "cubic2", 1.1),
+        (interp2d, Interpolator2D, (2, 0), "linear", None),
+        (interp3d, Interpolator3D, (3, 1, 0), "cubic", (1.1, None, 1.1)),
+    ],
+)
+def test_interp_axis(fun, cls, axis, method, period):
+    """Test interpolating along non-leading axes, and functions matching classes."""
+    rng = np.random.default_rng(0)
+    axis_ = np.atleast_1d(axis) % (np.size(axis) + 2)
+    n = len(axis_)
+    grids = [np.linspace(0, 1, 6 + k) for k in range(n)]
+    shape = [3, 2]
+    for k in np.argsort(axis_):
+        shape.insert(axis_[k], len(grids[k]))
+    f = rng.random(shape)
+    q = [rng.random(5) for _ in range(n)]
+    derivative = (1,) + (0,) * (n - 1)
+    d = derivative if n > 1 else 1
+
+    # interpolate along the leading axes, then move the query axes where expected
+    ref = fun(*q, *grids, np.moveaxis(f, axis_, range(n)), method, d, period=period)
+    ref = np.moveaxis(ref, 0, min(axis_))
+
+    out1 = fun(*q, *grids, f, method, d, period=period, axis=axis)
+    out2 = cls(*grids, f, method, period=period, axis=axis)(*q, *derivative)
+    rest = [s for k, s in enumerate(f.shape) if k not in axis_]
+    assert out1.shape == tuple(rest[: min(axis_)] + [5] + rest[min(axis_) :])
+    np.testing.assert_allclose(out1, ref)
+    np.testing.assert_allclose(out2, ref)
+
+    with pytest.raises(ValueError):
+        fun(*q, *grids, f, method, axis=(0,) * n)
 
 
 @pytest.mark.unit

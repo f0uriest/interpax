@@ -1,7 +1,7 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
 from collections import OrderedDict
-from typing import Any, Union
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -24,9 +24,7 @@ CUBIC_METHODS = (
     "monotonic-0",
 )
 OTHER_METHODS = ("nearest", "linear")
-METHODS_1D = CUBIC_METHODS + OTHER_METHODS
-METHODS_2D = CUBIC_METHODS + OTHER_METHODS
-METHODS_3D = CUBIC_METHODS + OTHER_METHODS
+METHODS = CUBIC_METHODS + OTHER_METHODS
 
 
 class AbstractInterpolator(eqx.Module):
@@ -40,9 +38,9 @@ class AbstractInterpolator(eqx.Module):
     f: eqx.AbstractVar[Inexact[Array, "..."]]  # function values to interpolate
     derivs: eqx.AbstractVar[dict[str, Inexact[Array, "..."]]]
     method: str = eqx.field(static=True)
-    extrap: eqx.AbstractVar[Union[bool, float, tuple]]
-    period: eqx.AbstractVar[Union[None, float, tuple]]
-    axis: eqx.AbstractVar[int]
+    extrap: eqx.AbstractVar[bool | float | tuple]
+    period: eqx.AbstractVar[None | float | tuple]
+    axis: eqx.AbstractVar[int | tuple[int, ...]]
 
 
 class Interpolator1D(AbstractInterpolator):
@@ -78,6 +76,13 @@ class Interpolator1D(AbstractInterpolator):
     period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
+    fx : ndarray, optional
+        first derivatives of f with respect to x at the knots. For cubic methods, if
+        given these are used in place of the derivatives approximated by ``method``.
+    axis : int, optional
+        axis of f along which x varies. Default is 0. The output has the query shape
+        in place of this axis, ie
+        ``fq.shape == f.shape[:axis] + xq.shape + f.shape[axis + 1 :]``.
 
     """
 
@@ -85,21 +90,21 @@ class Interpolator1D(AbstractInterpolator):
     f: Inexact[Array, " Nx ..."]
     derivs: dict
     method: str = eqx.field(static=True)
-    extrap: Union[bool, float, tuple]
-    period: Union[None, float]
-    axis: int
+    extrap: bool | float | tuple
+    period: None | float
+    axis: int | tuple[int, ...] = eqx.field(static=True)
 
     def __init__(
         self,
         x: Real[ArrayLike, " Nx"],
         f: Num[ArrayLike, " Nx ..."],
         method: str = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float] = None,
+        extrap: bool | float | tuple = False,
+        period: None | float = None,
         **kwargs,
     ) -> None:
         x, f = map(asarray_inexact, (x, f))
-        axis = kwargs.get("axis", 0)
+        (axis,) = _parse_axis(kwargs.pop("axis", None), 1, f.ndim)
         fx = kwargs.pop("fx", None)
 
         errorif(
@@ -107,7 +112,7 @@ class Interpolator1D(AbstractInterpolator):
             ValueError,
             "x and f must be arrays of equal length",
         )
-        errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
+        errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
         self.x = x
         self.f = f
@@ -117,7 +122,7 @@ class Interpolator1D(AbstractInterpolator):
         self.period = period  # pyright: ignore
 
         if fx is None:
-            fx = approx_df(x, f, method, axis, **kwargs)
+            fx = _approx_df(x, f, method, axis, period, **kwargs)
 
         self.derivs = {"fx": fx}
 
@@ -146,6 +151,7 @@ class Interpolator1D(AbstractInterpolator):
             dx,
             self.extrap,
             self.period,
+            axis=self.axis,
             **self.derivs,
         )
 
@@ -186,6 +192,13 @@ class Interpolator2D(AbstractInterpolator):
         periodicity of the function in x, y directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
+    fx, fy, fxy : ndarray, optional
+        derivatives df/dx, df/dy, d2f/dxdy at the knots. For cubic methods, any that
+        are given are used in place of the derivatives approximated by ``method``.
+    axis : tuple of int, shape(2,), optional
+        axes of f along which x and y vary. Default is (0, 1). The output has the
+        remaining axes of f in their original order, with the query shape inserted at
+        position ``min(axis)``.
 
     """
 
@@ -194,9 +207,9 @@ class Interpolator2D(AbstractInterpolator):
     f: Inexact[Array, " Nx Ny ..."]
     derivs: dict
     method: str = eqx.field(static=True)
-    extrap: Union[bool, float, tuple]
-    period: Union[None, float, tuple]
-    axis: int
+    extrap: bool | float | tuple
+    period: None | float | tuple
+    axis: int | tuple[int, ...] = eqx.field(static=True)
 
     def __init__(
         self,
@@ -204,27 +217,27 @@ class Interpolator2D(AbstractInterpolator):
         y: Real[ArrayLike, " Ny"],
         f: Num[ArrayLike, " Nx Ny ..."],
         method: str = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float, tuple] = None,
+        extrap: bool | float | tuple = False,
+        period: None | float | tuple = None,
         **kwargs,
     ):
         x, y, f = map(asarray_inexact, (x, y, f))
-        axis = kwargs.get("axis", 0)
+        axis = _parse_axis(kwargs.pop("axis", None), 2, f.ndim)
         fx = kwargs.pop("fx", None)
         fy = kwargs.pop("fy", None)
         fxy = kwargs.pop("fxy", None)
 
         errorif(
-            (len(x) != f.shape[0]) or (x.ndim != 1),
+            (len(x) != f.shape[axis[0]]) or (x.ndim != 1),
             ValueError,
             "x and f must be arrays of equal length",
         )
         errorif(
-            (len(y) != f.shape[1]) or (y.ndim != 1),
+            (len(y) != f.shape[axis[1]]) or (y.ndim != 1),
             ValueError,
             "y and f must be arrays of equal length",
         )
-        errorif(method not in METHODS_2D, ValueError, f"unknown method {method}")
+        errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
         self.x = x
         self.y = y
@@ -233,13 +246,14 @@ class Interpolator2D(AbstractInterpolator):
         self.method = method
         self.extrap = extrap
         self.period = period
+        periodx, periody = _parse_ndarg(period, 2)
 
         if fx is None:
-            fx = approx_df(x, f, method, 0, **kwargs)
+            fx = _approx_df(x, f, method, axis[0], periodx, **kwargs)
         if fy is None:
-            fy = approx_df(y, f, method, 1, **kwargs)
+            fy = _approx_df(y, f, method, axis[1], periody, **kwargs)
         if fxy is None:
-            fxy = approx_df(y, fx, method, 1, **kwargs)
+            fxy = _approx_df(y, fx, method, axis[1], periody, **kwargs)
 
         self.derivs = {"fx": fx, "fy": fy, "fxy": fxy}
 
@@ -274,6 +288,7 @@ class Interpolator2D(AbstractInterpolator):
             (dx, dy),
             self.extrap,
             self.period,
+            axis=self.axis,
             **self.derivs,
         )
 
@@ -316,6 +331,14 @@ class Interpolator3D(AbstractInterpolator):
         periodicity of the function in x, y, z directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
+    fx, fy, fz, fxy, fxz, fyz, fxyz : ndarray, optional
+        derivatives df/dx, df/dy, df/dz, d2f/dxdy, d2f/dxdz, d2f/dydz, d3f/dxdydz at
+        the knots. For cubic methods, any that are given are used in place of the
+        derivatives approximated by ``method``.
+    axis : tuple of int, shape(3,), optional
+        axes of f along which x, y and z vary. Default is (0, 1, 2). The output has the
+        remaining axes of f in their original order, with the query shape inserted at
+        position ``min(axis)``.
 
     """
 
@@ -325,9 +348,9 @@ class Interpolator3D(AbstractInterpolator):
     f: Inexact[Array, " Nx Ny Nz ..."]
     derivs: dict
     method: str = eqx.field(static=True)
-    extrap: Union[bool, float, tuple]
-    period: Union[None, float, tuple]
-    axis: int
+    extrap: bool | float | tuple
+    period: None | float | tuple
+    axis: int | tuple[int, ...] = eqx.field(static=True)
 
     def __init__(
         self,
@@ -336,29 +359,29 @@ class Interpolator3D(AbstractInterpolator):
         z: Real[ArrayLike, " Nz"],
         f: Num[ArrayLike, " Nx Ny Nz ..."],
         method: str = "cubic",
-        extrap: Union[bool, float, tuple] = False,
-        period: Union[None, float, tuple] = None,
+        extrap: bool | float | tuple = False,
+        period: None | float | tuple = None,
         **kwargs,
     ):
         x, y, z, f = map(asarray_inexact, (x, y, z, f))
-        axis = kwargs.get("axis", 0)
+        axis = _parse_axis(kwargs.pop("axis", None), 3, f.ndim)
 
         errorif(
-            (len(x) != f.shape[0]) or (x.ndim != 1),
+            (len(x) != f.shape[axis[0]]) or (x.ndim != 1),
             ValueError,
             "x and f must be arrays of equal length",
         )
         errorif(
-            (len(y) != f.shape[1]) or (y.ndim != 1),
+            (len(y) != f.shape[axis[1]]) or (y.ndim != 1),
             ValueError,
             "y and f must be arrays of equal length",
         )
         errorif(
-            (len(z) != f.shape[2]) or (z.ndim != 1),
+            (len(z) != f.shape[axis[2]]) or (z.ndim != 1),
             ValueError,
             "z and f must be arrays of equal length",
         )
-        errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
+        errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
         fx = kwargs.pop("fx", None)
         fy = kwargs.pop("fy", None)
@@ -376,21 +399,22 @@ class Interpolator3D(AbstractInterpolator):
         self.method = method
         self.extrap = extrap
         self.period = period
+        periodx, periody, periodz = _parse_ndarg(period, 3)
 
         if fx is None:
-            fx = approx_df(x, f, method, 0, **kwargs)
+            fx = _approx_df(x, f, method, axis[0], periodx, **kwargs)
         if fy is None:
-            fy = approx_df(y, f, method, 1, **kwargs)
+            fy = _approx_df(y, f, method, axis[1], periody, **kwargs)
         if fz is None:
-            fz = approx_df(z, f, method, 2, **kwargs)
+            fz = _approx_df(z, f, method, axis[2], periodz, **kwargs)
         if fxy is None:
-            fxy = approx_df(y, fx, method, 1, **kwargs)
+            fxy = _approx_df(y, fx, method, axis[1], periody, **kwargs)
         if fxz is None:
-            fxz = approx_df(z, fx, method, 2, **kwargs)
+            fxz = _approx_df(z, fx, method, axis[2], periodz, **kwargs)
         if fyz is None:
-            fyz = approx_df(z, fy, method, 2, **kwargs)
+            fyz = _approx_df(z, fy, method, axis[2], periodz, **kwargs)
         if fxyz is None:
-            fxyz = approx_df(z, fxy, method, 2, **kwargs)
+            fxyz = _approx_df(z, fxy, method, axis[2], periodz, **kwargs)
 
         self.derivs = {
             "fx": fx,
@@ -437,19 +461,20 @@ class Interpolator3D(AbstractInterpolator):
             (dx, dy, dz),
             self.extrap,
             self.period,
+            axis=self.axis,
             **self.derivs,
         )
 
 
-@wrap_jit(static_argnames=["method"])
+@wrap_jit(static_argnames=["method", "axis"])
 def interp1d(
     xq: Real[ArrayLike, " Nq"],
     x: Real[ArrayLike, " Nx"],
     f: Num[ArrayLike, "Nx ..."],
     method: str = "cubic",
     derivative: int = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float] = None,
+    extrap: bool | float | tuple = False,
+    period: None | float = None,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 1d function.
@@ -488,6 +513,13 @@ def interp1d(
     period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
+    fx : ndarray, optional
+        first derivatives of f with respect to x at the knots. For cubic methods, if
+        given these are used in place of the derivatives approximated by ``method``.
+    axis : int, optional
+        axis of f along which x varies. Default is 0. The output has the query shape
+        in place of this axis, ie
+        ``fq.shape == f.shape[:axis] + xq.shape + f.shape[axis + 1 :]``.
 
     Returns
     -------
@@ -504,9 +536,14 @@ def interp1d(
     xtype = jnp.result_type(x, xq)
     x, xq = map(lambda a: a.astype(xtype), (x, xq))
     f = f.astype(jnp.result_type(f, x))
-    axis = kwargs.get("axis", 0)
+    axis = _parse_axis(kwargs.pop("axis", None), 1, f.ndim)
     fx = kwargs.pop("fx", None)
+    # interpolate along the leading axis, then move the query axes into place
+    f = jnp.moveaxis(f, axis, 0)
+    if fx is not None:
+        fx = jnp.moveaxis(fx, axis, 0)
     outshape = xq.shape + f.shape[1:]
+    nq = xq.ndim
 
     # Promote scalar query points to 1D array.
     # Note this is done after the computation of outshape
@@ -514,16 +551,19 @@ def interp1d(
     xq = jnp.atleast_1d(xq)
 
     errorif(
-        (len(x) != f.shape[axis]) or (jnp.ndim(x) != 1),
+        (len(x) != f.shape[0]) or (jnp.ndim(x) != 1),
         ValueError,
         "x and f must be arrays of equal length",
     )
-    errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
+    errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
     lowx, highx = _parse_extrap(extrap, 1)
 
+    if method in CUBIC_METHODS and fx is None:
+        fx = _approx_df(x, f, method, 0, period, **kwargs)
+
     if period is not None:
-        xq, x, f, fx = _make_periodic(xq, x, period, axis, f, fx)
+        xq, x, f, fx = _make_periodic(xq, x, period, 0, f, fx)
         lowx = highx = True
 
     if method == "nearest":
@@ -541,20 +581,20 @@ def interp1d(
 
         def derivative0_linear():
             i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-            df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
+            df = f[i] - f[i - 1]
             dx = x[i] - x[i - 1]
             dxi = jnp.where(dx == 0, 0, 1 / dx)
             delta = xq - x[i - 1]
             fq = jnp.where(
                 (dx == 0),
-                jnp.take(f, i, axis).T,
-                jnp.take(f, i - 1, axis).T + (delta * dxi * df.T),
+                f[i].T,
+                f[i - 1].T + (delta * dxi * df.T),
             ).T
             return fq
 
         def derivative1_linear():
             i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-            df = jnp.take(f, i, axis) - jnp.take(f, i - 1, axis)
+            df = f[i] - f[i - 1]
             dx = x[i] - x[i - 1]
             dxi = jnp.where(dx == 0, 0, 1 / dx)
             return (df.T * dxi).T
@@ -569,19 +609,17 @@ def interp1d(
     else:
         assert method in CUBIC_METHODS
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-        if fx is None:
-            fx = approx_df(x, f, method, axis, **kwargs)
-        assert fx.shape == f.shape
+        assert fx is not None and fx.shape == f.shape
 
         dx = x[i] - x[i - 1]
         delta = xq - x[i - 1]
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         t = delta * dxi
 
-        f0 = jnp.take(f, i - 1, axis)
-        f1 = jnp.take(f, i, axis)
-        fx0 = (jnp.take(fx, i - 1, axis).T * dx).T
-        fx1 = (jnp.take(fx, i, axis).T * dx).T
+        f0 = f[i - 1]
+        f1 = f[i]
+        fx0 = (fx[i - 1].T * dx).T
+        fx1 = (fx[i].T * dx).T
 
         F = jnp.stack([f0, f1, fx0, fx1], axis=0).T
         coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F).T
@@ -589,10 +627,10 @@ def interp1d(
         fq = jnp.einsum("ji...,ij->i...", coef, ttx)
 
     fq = _extrap(xq, fq, x, lowx, highx)
-    return fq.reshape(outshape)
+    return _move_query_axes(fq.reshape(outshape), nq, axis)
 
 
-@wrap_jit(static_argnames=["method"])
+@wrap_jit(static_argnames=["method", "axis"])
 def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq: Real[ArrayLike, " Nq"],
     yq: Real[ArrayLike, " Nq"],
@@ -600,9 +638,9 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     y: Real[ArrayLike, " Ny"],
     f: Num[ArrayLike, "Nx Ny ..."],
     method: str = "cubic",
-    derivative: Union[int, tuple] = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float, tuple] = None,
+    derivative: int | tuple = 0,
+    extrap: bool | float | tuple = False,
+    period: None | float | tuple = None,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 2d function.
@@ -647,6 +685,13 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         periodicity of the function in x, y directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
+    fx, fy, fxy : ndarray, optional
+        derivatives df/dx, df/dy, d2f/dxdy at the knots. For cubic methods, any that
+        are given are used in place of the derivatives approximated by ``method``.
+    axis : tuple of int, shape(2,), optional
+        axes of f along which x and y vary. Default is (0, 1). The output has the
+        remaining axes of f in their original order, with the query shape inserted at
+        position ``min(axis)``.
 
     Returns
     -------
@@ -665,11 +710,22 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     x, y, xq, yq = map(lambda a: a.astype(xtype), (x, y, xq, yq))
     f = f.astype(jnp.result_type(f, x))
 
+    axis = _parse_axis(kwargs.pop("axis", None), 2, f.ndim)
     fx = kwargs.pop("fx", None)
     fy = kwargs.pop("fy", None)
     fxy = kwargs.pop("fxy", None)
+    # interpolate along the leading axes, then move the query axes into place
+    dest = (0, 1)
+    f = jnp.moveaxis(f, axis, dest)
+    if fx is not None:
+        fx = jnp.moveaxis(fx, axis, dest)
+    if fy is not None:
+        fy = jnp.moveaxis(fy, axis, dest)
+    if fxy is not None:
+        fxy = jnp.moveaxis(fxy, axis, dest)
     xq, yq = jnp.broadcast_arrays(xq, yq)
     outshape = xq.shape + f.shape[2:]
+    nq = xq.ndim
 
     # Promote scalar query points to 1D array.
     # Note this is done after the computation of outshape
@@ -686,11 +742,19 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         ValueError,
         "y and f must be arrays of equal length",
     )
-    errorif(method not in METHODS_2D, ValueError, f"unknown method {method}")
+    errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
     periodx, periody = _parse_ndarg(period, 2)
     derivative_x, derivative_y = _parse_ndarg(derivative, 2)
     lowx, highx, lowy, highy = _parse_extrap(extrap, 2)
+
+    if method in CUBIC_METHODS:
+        if fx is None:
+            fx = _approx_df(x, f, method, 0, periodx, **kwargs)
+        if fy is None:
+            fy = _approx_df(y, f, method, 1, periody, **kwargs)
+        if fxy is None:
+            fxy = _approx_df(y, fx, method, 1, periody, **kwargs)
 
     if periodx is not None:
         xq, x, f, fx, fy, fxy = _make_periodic(xq, x, periodx, 0, f, fx, fy, fxy)
@@ -756,12 +820,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     else:
         assert method in CUBIC_METHODS
-        if fx is None:
-            fx = approx_df(x, f, method, 0, **kwargs)
-        if fy is None:
-            fy = approx_df(y, f, method, 1, **kwargs)
-        if fxy is None:
-            fxy = approx_df(y, fx, method, 1, **kwargs)
+        assert fx is not None and fy is not None and fxy is not None
         assert fx.shape == fy.shape == fxy.shape == f.shape
 
         i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
@@ -802,10 +861,10 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
 
-    return fq.reshape(outshape)
+    return _move_query_axes(fq.reshape(outshape), nq, axis)
 
 
-@wrap_jit(static_argnames=["method"])
+@wrap_jit(static_argnames=["method", "axis"])
 def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq: Real[ArrayLike, " Nq"],
     yq: Real[ArrayLike, " Nq"],
@@ -815,9 +874,9 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     z: Real[ArrayLike, " Nz"],
     f: Num[ArrayLike, "Nx Ny Nz ..."],
     method: str = "cubic",
-    derivative: Union[int, tuple] = 0,
-    extrap: Union[bool, float, tuple] = False,
-    period: Union[None, float, tuple] = None,
+    derivative: int | tuple = 0,
+    extrap: bool | float | tuple = False,
+    period: None | float | tuple = None,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 3d function.
@@ -866,6 +925,14 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         periodicity of the function in x, y, z directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in all directions.
+    fx, fy, fz, fxy, fxz, fyz, fxyz : ndarray, optional
+        derivatives df/dx, df/dy, df/dz, d2f/dxdy, d2f/dxdz, d2f/dydz, d3f/dxdydz at
+        the knots. For cubic methods, any that are given are used in place of the
+        derivatives approximated by ``method``.
+    axis : tuple of int, shape(3,), optional
+        axes of f along which x, y and z vary. Default is (0, 1, 2). The output has the
+        remaining axes of f in their original order, with the query shape inserted at
+        position ``min(axis)``.
 
     Returns
     -------
@@ -884,6 +951,32 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     x, y, z, xq, yq, zq = map(lambda a: a.astype(xtype), (x, y, z, xq, yq, zq))
     f = f.astype(jnp.result_type(f, x))
 
+    axis = _parse_axis(kwargs.pop("axis", None), 3, f.ndim)
+    fx = kwargs.pop("fx", None)
+    fy = kwargs.pop("fy", None)
+    fz = kwargs.pop("fz", None)
+    fxy = kwargs.pop("fxy", None)
+    fxz = kwargs.pop("fxz", None)
+    fyz = kwargs.pop("fyz", None)
+    fxyz = kwargs.pop("fxyz", None)
+    # interpolate along the leading axes, then move the query axes into place
+    dest = (0, 1, 2)
+    f = jnp.moveaxis(f, axis, dest)
+    if fx is not None:
+        fx = jnp.moveaxis(fx, axis, dest)
+    if fy is not None:
+        fy = jnp.moveaxis(fy, axis, dest)
+    if fz is not None:
+        fz = jnp.moveaxis(fz, axis, dest)
+    if fxy is not None:
+        fxy = jnp.moveaxis(fxy, axis, dest)
+    if fxz is not None:
+        fxz = jnp.moveaxis(fxz, axis, dest)
+    if fyz is not None:
+        fyz = jnp.moveaxis(fyz, axis, dest)
+    if fxyz is not None:
+        fxyz = jnp.moveaxis(fxyz, axis, dest)
+
     errorif(
         (len(x) != f.shape[0]) or (x.ndim != 1),
         ValueError,
@@ -899,27 +992,36 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         ValueError,
         "z and f must be arrays of equal length",
     )
-    errorif(method not in METHODS_3D, ValueError, f"unknown method {method}")
+    errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
     xq, yq, zq = jnp.broadcast_arrays(xq, yq, zq)
     outshape = xq.shape + f.shape[3:]
+    nq = xq.ndim
 
     # Promote scalar query points to 1D array.
     # Note this is done after the computation of outshape
     # to make jax.grad work in the scalar case.
     xq, yq, zq = map(jnp.atleast_1d, (xq, yq, zq))
 
-    fx = kwargs.pop("fx", None)
-    fy = kwargs.pop("fy", None)
-    fz = kwargs.pop("fz", None)
-    fxy = kwargs.pop("fxy", None)
-    fxz = kwargs.pop("fxz", None)
-    fyz = kwargs.pop("fyz", None)
-    fxyz = kwargs.pop("fxyz", None)
-
     periodx, periody, periodz = _parse_ndarg(period, 3)
     derivative_x, derivative_y, derivative_z = _parse_ndarg(derivative, 3)
     lowx, highx, lowy, highy, lowz, highz = _parse_extrap(extrap, 3)
+
+    if method in CUBIC_METHODS:
+        if fx is None:
+            fx = _approx_df(x, f, method, 0, periodx, **kwargs)
+        if fy is None:
+            fy = _approx_df(y, f, method, 1, periody, **kwargs)
+        if fz is None:
+            fz = _approx_df(z, f, method, 2, periodz, **kwargs)
+        if fxy is None:
+            fxy = _approx_df(y, fx, method, 1, periody, **kwargs)
+        if fxz is None:
+            fxz = _approx_df(z, fx, method, 2, periodz, **kwargs)
+        if fyz is None:
+            fyz = _approx_df(z, fy, method, 2, periodz, **kwargs)
+        if fxyz is None:
+            fxyz = _approx_df(z, fxy, method, 2, periodz, **kwargs)
 
     if periodx is not None:
         xq, x, f, fx, fy, fz, fxy, fxz, fyz, fxyz = _make_periodic(
@@ -1024,20 +1126,15 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     else:
         assert method in CUBIC_METHODS
-        if fx is None:
-            fx = approx_df(x, f, method, 0, **kwargs)
-        if fy is None:
-            fy = approx_df(y, f, method, 1, **kwargs)
-        if fz is None:
-            fz = approx_df(z, f, method, 2, **kwargs)
-        if fxy is None:
-            fxy = approx_df(y, fx, method, 1, **kwargs)
-        if fxz is None:
-            fxz = approx_df(z, fx, method, 2, **kwargs)
-        if fyz is None:
-            fyz = approx_df(z, fy, method, 2, **kwargs)
-        if fxyz is None:
-            fxyz = approx_df(z, fxy, method, 2, **kwargs)
+        assert (
+            fx is not None
+            and fy is not None
+            and fz is not None
+            and fxy is not None
+            and fxz is not None
+            and fyz is not None
+            and fxyz is not None
+        )
         assert (
             fx.shape
             == fy.shape
@@ -1102,7 +1199,56 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     fq = _extrap(yq, fq, y, lowy, highy)
     fq = _extrap(zq, fq, z, lowz, highz)
 
-    return fq.reshape(outshape)
+    return _move_query_axes(fq.reshape(outshape), nq, axis)
+
+
+def _parse_axis(
+    axis: None | int | tuple[int, ...], n: int, ndim: int
+) -> tuple[int, ...]:
+    """Normalize the axes of an array of rank ndim that correspond to n grid dims."""
+    if axis is None:
+        axis = tuple(range(n))
+    elif isinstance(axis, (int, np.integer)):
+        errorif(n != 1, ValueError, f"axis must be a tuple of {n} ints, got {axis}")
+        axis = (axis,)
+    axis = tuple(int(a) for a in axis)
+    errorif(len(axis) != n, ValueError, f"axis must be a tuple of {n} ints, got {axis}")
+    errorif(
+        any(not (-ndim <= a < ndim) for a in axis),
+        ValueError,
+        f"axis {axis} out of bounds for array of dimension {ndim}",
+    )
+    axis = tuple(a % ndim for a in axis)
+    errorif(len(set(axis)) != n, ValueError, f"repeated axis in {axis}")
+    return axis
+
+
+def _move_query_axes(fq: jax.Array, nq: int, axis: tuple[int, ...]) -> jax.Array:
+    """Move leading nq query dimensions to where the grid axes of f started."""
+    start = min(axis)
+    return jnp.moveaxis(fq, tuple(range(nq)), tuple(range(start, start + nq)))
+
+
+def _approx_df(
+    x: jax.Array,
+    f: jax.Array,
+    method: str,
+    axis: int,
+    period: None | float,
+    **kwargs,
+) -> jax.Array:
+    """Approximate df/dx along axis, treating f as periodic if period is given."""
+    if period is None:
+        return approx_df(x, f, method, axis, **kwargs)
+    # Approximate on the periodically padded data so knots adjacent to the boundary
+    # see their wrapped neighbors, then drop the padding and undo the sort so the
+    # result lines up with f. Later padding copies these values, so every copy of a
+    # knot has the same derivative.
+    _, xp, fp = _make_periodic(x, x, period, axis, f)
+    fx = approx_df(xp, fp, method, axis, **kwargs)
+    fx = jnp.take(fx, jnp.arange(1, x.size + 1), axis)
+    unsort = jnp.argsort(jnp.argsort(x % abs(period)))
+    return jnp.take(fx, unsort, axis)
 
 
 @wrap_jit(static_argnames=["axis"])
@@ -1111,7 +1257,7 @@ def _make_periodic(
     x: jax.Array,
     period: float,
     axis: int,
-    *arrs: jax.Array,
+    *arrs: jax.Array | None,
 ) -> tuple[jax.Array, ...]:
     """Make arrays periodic along a specified axis."""
     period = abs(period)
@@ -1120,15 +1266,15 @@ def _make_periodic(
     i = jnp.argsort(x)
     x = x[i]
     x = jnp.concatenate([x[-1:] - period, x, x[:1] + period])
-    arrlist = list(arrs)
-    for k in range(len(arrlist)):
-        if arrlist[k] is not None:
-            arrlist[k] = jnp.take(arrlist[k], i, axis, mode="wrap")
+    arrlist: list[Any] = list(arrs)
+    for k, arr in enumerate(arrlist):
+        if arr is not None:
+            arr = jnp.take(arr, i, axis, mode="wrap")
             arrlist[k] = jnp.concatenate(
                 [
-                    jnp.take(arrlist[k], jnp.array([-1]), axis),
-                    arrlist[k],
-                    jnp.take(arrlist[k], jnp.array([0]), axis),
+                    jnp.take(arr, jnp.array([-1]), axis),
+                    arr,
+                    jnp.take(arr, jnp.array([0]), axis),
                 ],
                 axis=axis,
             )
@@ -1151,13 +1297,13 @@ def _get_t_der(t: jax.Array, derivative: int, dxi: jax.Array):
     return jax.lax.switch(derivative, [d0, d1, d2, d3, d4])
 
 
-def _parse_ndarg(arg: Any, n: int) -> Union[Any, tuple]:
+def _parse_ndarg(arg: Any, n: int) -> Any | tuple:
     try:
         k = len(arg)
     except TypeError:
         arg = tuple(arg for _ in range(n))
         k = n
-    assert k == n, "got too many args"
+    errorif(k != n, ValueError, f"expected {n} values, got {k}")
     return arg
 
 
@@ -1182,18 +1328,18 @@ def _extrap(
     xq: jax.Array,
     fq: jax.Array,
     x: jax.Array,
-    lo: Union[bool, float],
-    hi: Union[bool, float],
+    lo: bool | float,
+    hi: bool | float,
 ):
     """Clamp or extrapolate values outside bounds."""
 
-    def loclip(fq: jax.Array, lo: Union[bool, float]):
+    def loclip(fq: jax.Array, lo: bool | float):
         # lo is either False (no extrapolation) or a fixed value to fill in
         if isbool(lo):
             lo = jnp.nan
         return jnp.where(xq < x[0], lo, fq.T).T
 
-    def hiclip(fq: jax.Array, hi: Union[bool, float]):
+    def hiclip(fq: jax.Array, hi: bool | float):
         # hi is either False (no extrapolation) or a fixed value to fill in
         if isbool(hi):
             hi = jnp.nan
