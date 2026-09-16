@@ -15,6 +15,7 @@ corresponding to each coordinate.
 - Fix ``Interpolator1D/2D/3D`` with ``period`` giving different results from
 ``interp1d/2d/3d``. Derivatives for periodic data are now approximated using the
 wrapped neighbors of every knot, so all copies of a knot share the same derivative.
+- Bump minimum JAX version to 0.5.0
 
 **Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.3.14...main
 
