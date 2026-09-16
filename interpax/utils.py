@@ -5,7 +5,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Inexact, Num
+from jaxtyping import Array, Inexact
 from numpy.typing import ArrayLike
 
 # jax.typing.ArrayLike and jaxtyping.ArrayLike don't include eg tuples,lists,iterables
@@ -28,7 +28,7 @@ def errorif(cond: bool | jax.Array, err: type[Exception] = ValueError, msg: str 
         raise err(msg)
 
 
-def asarray_inexact(x: Num[Arrayish, "..."]) -> Inexact[Array, "..."]:
+def asarray_inexact(x: Arrayish) -> Inexact[Array, "..."]:
     """Convert to jax array with floating point dtype."""
     x = jnp.asarray(x)
     if x.weak_type:  # preserve weakly typed things like scalars
