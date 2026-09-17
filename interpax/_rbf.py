@@ -2,8 +2,9 @@
 
 import math
 import warnings
+from collections.abc import Callable
 from itertools import combinations_with_replacement
-from typing import Any, Callable, Optional, Union, cast
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import jax
@@ -13,7 +14,6 @@ import jaxkd as jk
 import numpy as np
 from jax.scipy.linalg import solve
 from jaxtyping import Array, ArrayLike, Float, Int, Shaped
-from typing_extensions import Literal
 
 from .utils import asarray_inexact
 
@@ -330,7 +330,7 @@ class RBFInterpolator(eqx.Module):
     d: Shaped[Array, " P *d_shape"]
     d_shape: tuple
     d_dtype: jnp.dtype = eqx.field(static=True)
-    neighbors: Optional[int]
+    neighbors: int | None
     smoothing: Float[Array, " P"]
     kernel: Literal[
         "cubic",
@@ -344,20 +344,20 @@ class RBFInterpolator(eqx.Module):
     ] = eqx.field(static=True)
     epsilon: Float[Array, ""]
     powers: Int[Array, " R N"]
-    _shift: Optional[Float[Array, " N"]]
-    _scale: Optional[Float[Array, " N"]]
-    _coeffs: Optional[Shaped[Array, " P+R *d_shape"]]
-    _tree: Optional[Any]
+    _shift: Float[Array, " N"] | None
+    _scale: Float[Array, " N"] | None
+    _coeffs: Shaped[Array, " P+R *d_shape"] | None
+    _tree: Any | None
 
     def __init__(  # noqa: C901
         self,
         y: Float[ArrayLike, " P N"],
         d: Shaped[ArrayLike, " P *d_shape"],
-        neighbors: Optional[int] = None,
-        smoothing: Union[float, Float[ArrayLike, " P"]] = 0.0,
+        neighbors: int | None = None,
+        smoothing: float | Float[ArrayLike, " P"] = 0.0,
         kernel: str = "thin_plate_spline",
-        epsilon: Optional[Union[float, Float[Array, ""]]] = None,
-        degree: Optional[int] = None,
+        epsilon: float | Float[Array, ""] | None = None,
+        degree: int | None = None,
     ):
         y = asarray_inexact(y)
         if y.ndim != 2:
