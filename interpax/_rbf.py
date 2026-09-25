@@ -321,15 +321,15 @@ class RBFInterpolator(eqx.Module):
         no minimum degree. Set this to -1 for no added polynomial.
     """
 
-    y: Float[Array, " P N"]
-    d: Float[Array, " P S"]
-    d_shape: tuple
-    d_complex: bool = eqx.field(static=True)
-    neighbors: int | None
-    smoothing: Float[Array, " P"]
-    kernel: _KernelName = eqx.field(static=True)
-    epsilon: Float[Array, ""]
-    powers: Int[Array, " R N"]
+    _y: Float[Array, " P N"]
+    _d: Float[Array, " P S"]
+    _d_shape: tuple
+    _d_dtype: np.dtype = eqx.field(static=True)
+    _neighbors: int | None
+    _smoothing: Float[Array, " P"]
+    _kernel: _KernelName = eqx.field(static=True)
+    _epsilon: Float[Array, ""]
+    _powers: Int[Array, " R N"]
     _shift: Float[Array, " N"] | None
     _scale: Float[Array, " N"] | None
     _coeffs: Shaped[Array, " P+R *d_shape"] | None
@@ -352,7 +352,7 @@ class RBFInterpolator(eqx.Module):
         ny, ndim = y.shape
 
         d = asarray_inexact(d)
-        d_complex = jnp.iscomplexobj(d)
+        d_dtype = d.dtype
         if d.shape[0] != ny:
             raise ValueError(f"Expected the first axis of `d` to have length {ny}.")
 
@@ -361,7 +361,7 @@ class RBFInterpolator(eqx.Module):
         # If `d` is complex, convert it to a float array with twice as many
         # columns. Otherwise, the LHS matrix would need to be converted to
         # complex and take up 2x more memory than necessary.
-        if d_complex:
+        if jnp.iscomplexobj(d):
             d = d.view(d.real.dtype)
 
         smoothing = asarray_inexact(smoothing)
@@ -445,15 +445,60 @@ class RBFInterpolator(eqx.Module):
             # https://github.com/dodgebc/jaxkd/issues/10
             self._tree = jk.build_tree(y.astype(_tree_dtype()))
 
-        self.y = y
-        self.d = d
-        self.d_shape = d_shape
-        self.d_complex = d_complex
-        self.neighbors = neighbors
-        self.smoothing = smoothing
-        self.kernel = kernel
-        self.epsilon = epsilon
-        self.powers = powers
+        self._y = y
+        self._d = d
+        self._d_shape = d_shape
+        self._d_dtype = d_dtype
+        self._neighbors = neighbors
+        self._smoothing = smoothing
+        self._kernel = kernel
+        self._epsilon = epsilon
+        self._powers = powers
+
+    @property
+    def y(self) -> Float[Array, " P N"]:
+        """Data point coordinates, shape(npoints, ndims)."""
+        return self._y
+
+    @property
+    def d(self) -> Float[Array, " P S"]:
+        """Data values flattened to shape(npoints, S), complex values as real pairs."""
+        return self._d
+
+    @property
+    def d_shape(self) -> tuple:
+        """Shape of each data value, the trailing dimensions of the input data."""
+        return self._d_shape
+
+    @property
+    def d_dtype(self) -> np.dtype:
+        """Dtype of the input data values."""
+        return self._d_dtype
+
+    @property
+    def neighbors(self) -> int | None:
+        """Number of nearest data points used for each evaluation, or None for all."""
+        return self._neighbors
+
+    @property
+    def smoothing(self) -> Float[Array, " P"]:
+        """Smoothing parameter for each data point, shape(npoints)."""
+        return self._smoothing
+
+    @property
+    def kernel(self) -> str:
+        """Name of the RBF kernel."""
+        return self._kernel
+
+    @property
+    def epsilon(self) -> Float[Array, ""]:
+        """Shape parameter that scales the input to the RBF."""
+        return self._epsilon
+
+    @property
+    def powers(self) -> Int[Array, " R N"]:
+        """Exponents of each monomial in the added polynomial, shape(R, ndims)."""
+        return self._powers
 
     def _chunk_evaluator(
         self,
@@ -599,7 +644,7 @@ class RBFInterpolator(eqx.Module):
                 process_single_point, (x, neighbors), batch_size=chunk_size
             )
 
-        if self.d_complex:
+        if jnp.issubdtype(self.d_dtype, jnp.complexfloating):
             # the real view of complex data may have been promoted by other inputs,
             # so view back as the complex type of matching precision
             out = out.view(jnp.promote_types(out.dtype, jnp.complex64))
