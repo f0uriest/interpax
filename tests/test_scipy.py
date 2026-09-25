@@ -1353,6 +1353,30 @@ class TestRBFInterpolator:
         with assert_raises(ValueError):
             RBFInterpolator(x, y, smoothing=np.ones(len(x) + 1))
 
+        with pytest.raises(ValueError, match="`y` must be a 2-dimensional array"):
+            RBFInterpolator(x.ravel(), y)
+
+        with pytest.raises(ValueError, match="first axis of `d` to have length"):
+            RBFInterpolator(x, y[:-1])
+
+        with pytest.raises(ValueError, match="`epsilon` must be a scalar"):
+            RBFInterpolator(x, y, epsilon=jnp.array([1.0, 2.0]))
+
+        # A quadratic polynomial in 1D needs three observations.
+        with pytest.raises(ValueError, match="At least 3 data points are required"):
+            RBFInterpolator(x[:2], y[:2], degree=2)
+
+    def test_incorrect_evaluation_inputs(self):
+        """Reject evaluation points with the wrong number of axes or dimensions."""
+        x, y = self._make_test_data_1d()
+        rbf = RBFInterpolator(x, y)
+
+        with pytest.raises(ValueError, match="`x` must be a 2-dimensional array"):
+            rbf(np.array([0.5]))
+
+        with pytest.raises(ValueError, match="second axis of `x` to have length 1"):
+            rbf(np.array([[0.5, 0.5]]))
+
     def test_single_point(self):
         """Test with single data point (degenerate case)."""
         x = np.array([[0.5]])
