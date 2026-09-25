@@ -44,7 +44,7 @@ from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
 from ._coefs import A_CUBIC
 from ._fd_derivs import approx_df
-from .utils import asarray_inexact, errorif, wrap_jit
+from ._utils import asarray_inexact, errorif, wrap_jit
 
 
 class PPoly(eqx.Module):

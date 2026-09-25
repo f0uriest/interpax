@@ -12,7 +12,7 @@ from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
 from ._coefs import A_BICUBIC, A_CUBIC, A_TRICUBIC
 from ._fd_derivs import approx_df
-from .utils import asarray_inexact, errorif, isbool, wrap_jit
+from ._utils import asarray_inexact, errorif, isbool, wrap_jit
 
 CUBIC_METHODS = (
     "cubic",

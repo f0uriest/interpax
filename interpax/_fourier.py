@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike, Inexact, Num
 
-from .utils import asarray_inexact, errorif, wrap_jit
+from ._utils import asarray_inexact, errorif, wrap_jit
 
 
 @wrap_jit(static_argnames=["n"])

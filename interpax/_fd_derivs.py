@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 
-from .utils import asarray_inexact, errorif
+from ._utils import asarray_inexact, errorif
 
 
 def approx_df(

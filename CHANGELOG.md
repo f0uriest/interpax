@@ -1,6 +1,13 @@
 Changelog
 =========
 
+
+- ``interpax.utils`` is now private, renamed to ``interpax._utils``. It was never part
+of the public API, which is everything in the documentation and all of which is
+importable from ``interpax`` directly. Importing it by the old name still works but
+emits a ``DeprecationWarning``, and will stop working in a future release.
+
+
 v0.3.15
 -------
 - ``CubicSpline`` now supports ``bc_type="periodic"``.

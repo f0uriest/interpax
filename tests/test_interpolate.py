@@ -707,3 +707,29 @@ if xb._backends:
         f"JAX backend was initialized during `import interpax`.\n"
         f"stderr: {result.stderr}"
     )
+
+
+@pytest.mark.unit
+def test_renamed_utils():
+    """``interpax.utils`` still imports by its old name, with a warning."""
+    # Run in a subprocess, since the conftest filters deprecation warnings by caller.
+    script = """
+import warnings
+import interpax
+from interpax._utils import errorif
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter("always")
+    from interpax.utils import errorif as old_errorif
+    assert old_errorif is errorif
+    assert interpax.utils.errorif is errorif
+assert {x.lineno for x in w} == {7, 9}, w
+assert all(issubclass(x.category, DeprecationWarning) for x in w), w
+assert all("interpax.utils" in str(x.message) for x in w), w
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
