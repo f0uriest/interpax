@@ -270,6 +270,11 @@ _KERNEL_FUNCTIONS = {
 }
 
 
+def _tree_dtype() -> jnp.dtype:
+    """Default float dtype, the only one jaxkd trees support."""
+    return jax.dtypes.canonicalize_dtype(jnp.float64)
+
+
 def _get_kernel(kernel: str) -> Callable[[Float[Array, "..."]], Float[Array, "..."]]:
     """Get the kernel function for a kernel name."""
     if kernel not in _AVAILABLE:
@@ -384,14 +389,14 @@ class RBFInterpolator(eqx.Module):
             float_dtype = d.real.dtype
             d = d.view(float_dtype)
 
-        if jnp.isscalar(smoothing):
-            smoothing = jnp.full(ny, smoothing, dtype=y.dtype)
-        else:
-            smoothing = asarray_inexact(smoothing).astype(y.dtype)
-            if smoothing.shape != (ny,):
-                raise ValueError(
-                    f"Expected `smoothing` to be a scalar or have shape ({ny},)."
-                )
+        smoothing = asarray_inexact(smoothing)
+        if smoothing.ndim == 0:
+            # broadcasting keeps python scalars weakly typed so they don't promote
+            smoothing = jnp.broadcast_to(smoothing, (ny,))
+        elif smoothing.shape != (ny,):
+            raise ValueError(
+                f"Expected `smoothing` to be a scalar or have shape ({ny},)."
+            )
 
         kernel = kernel.lower()
         if kernel not in _AVAILABLE:
@@ -474,8 +479,10 @@ class RBFInterpolator(eqx.Module):
             self._shift = None
             self._scale = None
             self._coeffs = None
-            # Build the tree for nearest neighbor queries
-            self._tree = jk.build_tree(y)
+            # Build the tree for nearest neighbor queries. jaxkd only supports the
+            # default float dtype, which is fine since only the indices are used.
+            # https://github.com/dodgebc/jaxkd/issues/10
+            self._tree = jk.build_tree(y.astype(_tree_dtype()))
 
         self.y = y
         self.d = d
@@ -596,12 +603,12 @@ class RBFInterpolator(eqx.Module):
                 raise ValueError("RBFInterpolator neighbor tree is not initialized.")
             # Get the indices of the k nearest observation points to each
             # evaluation point.
-            neighbors, _ = jk.query_neighbors(self._tree, x, k=self.neighbors)
+            neighbors, _ = jk.query_neighbors(
+                self._tree, x.astype(_tree_dtype()), k=self.neighbors
+            )
             if self.neighbors == 1:
                 # jaxkd may squeeze the output when k=1, ensure (Q, 1)
                 neighbors = jnp.reshape(neighbors, (-1, 1))
-
-            out = jnp.empty((nx, self.d.shape[1]), dtype=self.d.dtype)
 
             # Process each evaluation point individually
             # This is simpler but less optimized than the scipy version
@@ -641,8 +648,8 @@ class RBFInterpolator(eqx.Module):
             )
 
         if jnp.issubdtype(self.d_dtype, jnp.complexfloating):
-            out = out.astype(self.d.dtype).view(self.d_dtype)
-        else:
-            out = out.astype(self.d_dtype)
+            # the real view of complex data may have been promoted by other inputs,
+            # so view back as the complex type of matching precision
+            out = out.view(jnp.promote_types(out.dtype, jnp.complex64))
         out = out.reshape((nx,) + self.d_shape)
         return out
