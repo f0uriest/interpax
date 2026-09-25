@@ -210,26 +210,31 @@ def _build_evaluation_coefficients(
         return K
 
 
-# Define individual kernel functions for JAX compatibility
+# Kernels involving sqrt or log of r2 are singular in their derivatives at r2=0.
+# Masking only the output with jnp.where still propagates NaN gradients from the
+# unselected branch (0 * inf), so the input is also replaced with a safe value.
+def _safe_r2(r2: Float[Array, "..."]) -> Float[Array, "..."]:
+    return jnp.where(r2 > 0, r2, jnp.ones_like(r2))
+
+
 def _linear_kernel(r2: Float[Array, "..."]) -> Float[Array, "..."]:
     """Linear RBF kernel: -r."""
-    return jnp.where(r2 > 0, -jnp.sqrt(r2), 0.0)
+    return jnp.where(r2 > 0, -jnp.sqrt(_safe_r2(r2)), 0.0)
 
 
 def _thin_plate_spline_kernel(r2: Float[Array, "..."]) -> Float[Array, "..."]:
     """Thin plate spline RBF kernel: r^2 * log(r)."""
-    safe_r2 = jnp.where(r2 > 0, r2, jnp.ones_like(r2))
-    return jnp.where(r2 > 0, r2 * 0.5 * jnp.log(safe_r2), 0.0)
+    return jnp.where(r2 > 0, r2 * 0.5 * jnp.log(_safe_r2(r2)), 0.0)
 
 
 def _cubic_kernel(r2: Float[Array, "..."]) -> Float[Array, "..."]:
     """Cubic RBF kernel: r^3."""
-    return jnp.where(r2 > 0, r2 * jnp.sqrt(r2), 0.0)
+    return jnp.where(r2 > 0, r2 * jnp.sqrt(_safe_r2(r2)), 0.0)
 
 
 def _quintic_kernel(r2: Float[Array, "..."]) -> Float[Array, "..."]:
     """Quintic RBF kernel: -r^5."""
-    return jnp.where(r2 > 0, -(r2 * r2 * jnp.sqrt(r2)), 0.0)
+    return jnp.where(r2 > 0, -(r2 * r2 * jnp.sqrt(_safe_r2(r2))), 0.0)
 
 
 def _multiquadric_kernel(r2: Float[Array, "..."]) -> Float[Array, "..."]:
