@@ -1268,34 +1268,70 @@ class TestRBFInterpolator:
         y_complex_out = rbf_jax(np.array([[0.5]], dtype=np.float32))
         assert_equal(y_complex_out.dtype, np.dtype(np.complex64))
 
-    def test_gradients(self):
-        """Test that gradients are finite and reasonable."""
-        import jax
-        import jax.numpy as jnp
+        # output follows standard promotion of all inputs, python scalars are weak
+        p32 = np.array([[0.5]], dtype=np.float32)
+        cases = [
+            (x32, y32, dict(epsilon=1.0, smoothing=0.1), p32, np.float32),
+            (x32, y32, dict(epsilon=np.float64(1.0)), p32, np.float64),
+            (x32, y32, dict(epsilon=1.0, smoothing=np.full(3, 0.1)), p32, np.float64),
+            (x32, y32, dict(epsilon=1.0), p32.astype(np.float64), np.float64),
+            (x32, y_complex, dict(epsilon=1.0), p32.astype(np.float64), np.complex128),
+        ]
+        for y_, d_, kwargs, p, dtype in cases:
+            for neighbors in [None, 2]:
+                rbf_jax = RBFInterpolator(
+                    y_, d_, kernel="gaussian", neighbors=neighbors, **kwargs
+                )
+                assert_equal(rbf_jax(p).dtype, np.dtype(dtype))
 
-        x = jnp.array([[0.0], [1.0], [2.0]], dtype=jnp.float32)
-        y = jnp.array([0.0, 1.0, -0.5], dtype=jnp.float32)
-        rbf = RBFInterpolator(x, y, kernel="thin_plate_spline")
+    @pytest.mark.parametrize(
+        "kernel, epsilon",
+        [
+            ("linear", None),
+            ("thin_plate_spline", None),
+            ("cubic", None),
+            ("quintic", None),
+            ("multiquadric", 1.0),
+            ("inverse_multiquadric", 1.0),
+            ("inverse_quadratic", 1.0),
+            ("gaussian", 1.0),
+        ],
+    )
+    def test_gradients(self, kernel, epsilon):
+        """Test that gradients are finite, including at data points, and correct."""
+        y = jnp.linspace(0.0, 2.0, 6)[:, None]
+        d = jnp.sin(y[:, 0])
+        rbf = RBFInterpolator(y, d, kernel=kernel, epsilon=epsilon)
 
         def f(p):
             return rbf(p[None, :])[0]
 
-        def g(p):
-            return rbf(p[None, :])
+        h = 1e-6
 
-        p0 = jnp.array([0.0], dtype=jnp.float32)
-        grad0 = jax.grad(f)(p0)
-        assert_(jnp.all(jnp.isfinite(grad0)))
-        jac_fwd = jax.jacfwd(g)(p0)
-        jac_rev = jax.jacrev(g)(p0)
-        assert_(jnp.all(jnp.isfinite(jac_fwd)))
-        assert_(jnp.all(jnp.isfinite(jac_rev)))
+        # evaluation point coinciding with a data point, where r = 0. For the linear
+        # kernel the interpolant has a kink here, and the gradient should match the
+        # symmetric (central difference) derivative.
+        p0 = y[2]
+        assert_(jnp.all(jnp.isfinite(jax.jacfwd(f)(p0))))
+        assert_(jnp.all(jnp.isfinite(jax.jacrev(f)(p0))))
+        fd0 = (f(p0 + h) - f(p0 - h)) / (2 * h)
+        assert_allclose(jax.grad(f)(p0), fd0, rtol=1e-6, atol=1e-8)
 
-        p1 = jnp.array([0.3], dtype=jnp.float32)
-        grad1 = jax.grad(f)(p1)
-        eps = 1e-3
-        fd = (f(p1 + eps) - f(p1 - eps)) / (2 * eps)
-        assert_allclose(np.asarray(grad1), np.asarray(fd), rtol=1e-2, atol=1e-2)
+        # derivatives through the solve, whose matrix always contains r = 0
+        p1 = jnp.array([0.3])
+
+        def g(yy, dd):
+            interp = RBFInterpolator(yy, dd, kernel=kernel, epsilon=epsilon)
+            return interp(p1[None, :])[0]
+
+        dy, dd = jax.grad(g, argnums=(0, 1))(y, d)
+        assert_(jnp.all(jnp.isfinite(dy)))
+        assert_(jnp.all(jnp.isfinite(dd)))
+
+        fd = (f(p1 + h) - f(p1 - h)) / (2 * h)
+        assert_allclose(jax.grad(f)(p1), fd, rtol=1e-6, atol=1e-8)
+        fd_y = (g(y.at[1, 0].add(h), d) - g(y.at[1, 0].add(-h), d)) / (2 * h)
+        assert_allclose(dy[1, 0], fd_y, rtol=1e-5, atol=1e-7)
 
     def test_incorrect_inputs(self):
         """Test error handling for incorrect inputs."""
