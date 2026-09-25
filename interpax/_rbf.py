@@ -641,8 +641,10 @@ class RBFInterpolator(eqx.Module):
 
                 return result[0]  # Extract the single result
 
-            # Process points in chunks to stay within memory budget
-            chunk_size = max(1, int(memory_budget / (self.neighbors * self.d.shape[1])))
+            # Each point builds and solves its own (k + R) x (k + R) system with
+            # S right hand sides, which dominates the memory per point.
+            nsys = self.neighbors + self.powers.shape[0]
+            chunk_size = max(1, memory_budget // (nsys * (nsys + self.d.shape[1])))
             out = jax.lax.map(
                 process_single_point, (x, neighbors), batch_size=chunk_size
             )
