@@ -20,4 +20,4 @@ repos:
     hooks:
     - id: pyright
       additional_dependencies:
-        ["equinox", "jax", "jaxtyping", "lineax", "numpy", "pytest", "scipy"]
+        ["equinox", "jax", "jaxtyping", "lineax", "numpy", "pytest", "scipy", "jaxkd"]

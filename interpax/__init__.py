@@ -10,6 +10,7 @@ from ._ppoly import (
     PchipInterpolator,
     PPoly,
 )
+from ._rbf import RBFInterpolator
 from ._spline import (
     AbstractInterpolator,
     Interpolator1D,
@@ -36,6 +37,7 @@ __all__ = [
     "interp1d",
     "interp2d",
     "interp3d",
+    "RBFInterpolator",
 ]
 
 __version__ = _version.get_versions()["version"]
