@@ -759,11 +759,16 @@ def test_interp_axis(fun, cls, axis, method, period):
     ref = np.moveaxis(ref, 0, min(axis_))
 
     out1 = fun(*q, *grids, f, method, d, period=period, axis=axis)
-    out2 = cls(*grids, f, method, period=period, axis=axis)(*q, *derivative)
+    interp = cls(*grids, f, method, period=period, axis=axis)
+    out2 = interp(*q, *derivative)
+    # derivatives given back in the layout of f reproduce the same interpolant
+    kw = interp.derivs if n > 1 else {}
+    out3 = cls(*grids, f, method, period=period, axis=axis, **kw)(*q, *derivative)
     rest = [s for k, s in enumerate(f.shape) if k not in axis_]
     assert out1.shape == tuple(rest[: min(axis_)] + [5] + rest[min(axis_) :])
     np.testing.assert_allclose(out1, ref)
     np.testing.assert_allclose(out2, ref)
+    np.testing.assert_allclose(out3, ref)
 
     with pytest.raises(ValueError):
         fun(*q, *grids, f, method, axis=(0,) * n)
