@@ -5,8 +5,13 @@ Changelog
 
 v0.3.16
 -------
-- Adds ``"even_spacing"`` option to ``interpXd`` and ``InterpolatorXD``. If the user
-sets this to True, the neighboring indices will be computed without a binary search.
+- Adds ``even_spacing`` option to ``interpXd`` and ``InterpolatorXD``. If the knots are
+evenly spaced, the interval containing each query point is computed directly instead
+of by binary search. ``InterpolatorXD`` detects evenly spaced knots automatically by
+default, once at construction. ``interpXd`` uses a binary search by default; pass True
+to assume even spacing, or None to check on each call.
+- The binary search used for unevenly spaced knots is unrolled, which is several times
+faster on GPU.
 - Bump maximum JAX version to 0.12.x
 - Adds support for Python 3.15, drops support for Python 3.10
 
