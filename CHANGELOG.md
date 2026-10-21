@@ -1,8 +1,16 @@
 Changelog
 =========
 
+
+
+v0.3.16
+-------
 - Adds ``"even_spacing"`` option to ``interpXd`` and ``InterpolatorXD``. If the user
 sets this to True, the neighboring indices will be computed without a binary search.
+- Bump maximum JAX version to 0.12.x
+- Adds support for Python 3.15, drops support for Python 3.10
+
+**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.3.15...v0.3.16
 
 
 v0.3.15
@@ -21,7 +29,7 @@ corresponding to each coordinate.
 wrapped neighbors of every knot, so all copies of a knot share the same derivative.
 - Bump minimum JAX version to 0.5.0
 
-**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.3.14...main
+**Full Changelog**: https://github.com/f0uriest/interpax/compare/v0.3.14...v0.3.15
 
 
 v0.3.14
