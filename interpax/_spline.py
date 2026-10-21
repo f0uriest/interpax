@@ -76,11 +76,13 @@ class Interpolator1D(AbstractInterpolator):
     period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
-    even_spacing : bool
-        if True, user ensures that x is evenly spaced with constant
-        dx (there won't be internal checks). This helps finding the
-        neighboring points for the query positions faster. Defaults to False.
-        If periodic, x must cover one full period without the endpoint, e.g.
+    even_spacing : bool, None
+        Whether x is evenly spaced, which allows a faster lookup of the interval
+        containing each query point. If None, this is checked once at construction,
+        or on each call if constructed inside a jitted function. True skips the check,
+        and gives incorrect results if x is not evenly spaced. False always uses a
+        binary search. Defaults to None. If periodic, even spacing requires x to cover
+        one full period without the endpoint, e.g.
         ``np.linspace(0, period, N, endpoint=False)``.
     fx : ndarray, optional
         first derivatives of f with respect to x at the knots. For cubic methods, if
@@ -99,7 +101,7 @@ class Interpolator1D(AbstractInterpolator):
     extrap: bool | float | tuple
     period: None | float
     axis: int | tuple[int, ...] = eqx.field(static=True)
-    even_spacing: bool = eqx.field(static=True)
+    even_spacing: bool | None = eqx.field(static=True)
 
     def __init__(
         self,
@@ -108,7 +110,7 @@ class Interpolator1D(AbstractInterpolator):
         method: str = "cubic",
         extrap: bool | float | tuple = False,
         period: None | float = None,
-        even_spacing: bool = False,
+        even_spacing: bool | None = None,
         **kwargs,
     ) -> None:
         x, f = map(asarray_inexact, (x, f))
@@ -128,7 +130,7 @@ class Interpolator1D(AbstractInterpolator):
         self.method = method
         self.extrap = extrap
         self.period = period  # pyright: ignore
-        self.even_spacing = even_spacing
+        (self.even_spacing,) = _detect_even_spacing(even_spacing, (x,), (period,))
 
         if fx is None:
             fx = _approx_df(x, f, method, axis, period, **kwargs)
@@ -202,12 +204,15 @@ class Interpolator2D(AbstractInterpolator):
         periodicity of the function in x, y directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
-    even_spacing : bool
-        if True, user ensures that each array x, y is evenly spaced with constant
-        dx, dy (there won't be internal checks). This helps finding the
-        neighboring points for the query positions faster. Defaults to False.
-        Along periodic axes, the knots must cover one full period without the
-        endpoint, e.g. ``np.linspace(0, period, N, endpoint=False)``.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked
+        once at construction, or on each call if constructed inside a jitted
+        function. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to None. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fxy : ndarray, optional
         derivatives df/dx, df/dy, d2f/dxdy at the knots. For cubic methods, any that
         are given are used in place of the derivatives approximated by ``method``.
@@ -226,7 +231,7 @@ class Interpolator2D(AbstractInterpolator):
     extrap: bool | float | tuple
     period: None | float | tuple
     axis: int | tuple[int, ...] = eqx.field(static=True)
-    even_spacing: bool = eqx.field(static=True)
+    even_spacing: bool | None | tuple = eqx.field(static=True)
 
     def __init__(
         self,
@@ -236,7 +241,7 @@ class Interpolator2D(AbstractInterpolator):
         method: str = "cubic",
         extrap: bool | float | tuple = False,
         period: None | float | tuple = None,
-        even_spacing: bool = False,
+        even_spacing: bool | None | tuple = None,
         **kwargs,
     ):
         x, y, f = map(asarray_inexact, (x, y, f))
@@ -264,8 +269,10 @@ class Interpolator2D(AbstractInterpolator):
         self.method = method
         self.extrap = extrap
         self.period = period
-        self.even_spacing = even_spacing
         periodx, periody = _parse_ndarg(period, 2)
+        self.even_spacing = _detect_even_spacing(
+            even_spacing, (x, y), (periodx, periody)
+        )
 
         if fx is None:
             fx = _approx_df(x, f, method, axis[0], periodx, **kwargs)
@@ -351,12 +358,15 @@ class Interpolator3D(AbstractInterpolator):
         periodicity of the function in x, y, z directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
-    even_spacing : bool
-        if True, user ensures that each array x, y, z is evenly spaced with constant
-        dx, dy and dz (there won't be internal checks). This helps finding the
-        neighboring points for the query positions faster. Defaults to False.
-        Along periodic axes, the knots must cover one full period without the
-        endpoint, e.g. ``np.linspace(0, period, N, endpoint=False)``.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked
+        once at construction, or on each call if constructed inside a jitted
+        function. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to None. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fz, fxy, fxz, fyz, fxyz : ndarray, optional
         derivatives df/dx, df/dy, df/dz, d2f/dxdy, d2f/dxdz, d2f/dydz, d3f/dxdydz at
         the knots. For cubic methods, any that are given are used in place of the
@@ -377,7 +387,7 @@ class Interpolator3D(AbstractInterpolator):
     extrap: bool | float | tuple
     period: None | float | tuple
     axis: int | tuple[int, ...] = eqx.field(static=True)
-    even_spacing: bool = eqx.field(static=True)
+    even_spacing: bool | None | tuple = eqx.field(static=True)
 
     def __init__(
         self,
@@ -388,7 +398,7 @@ class Interpolator3D(AbstractInterpolator):
         method: str = "cubic",
         extrap: bool | float | tuple = False,
         period: None | float | tuple = None,
-        even_spacing: bool = False,
+        even_spacing: bool | None | tuple = None,
         **kwargs,
     ):
         x, y, z, f = map(asarray_inexact, (x, y, z, f))
@@ -427,8 +437,10 @@ class Interpolator3D(AbstractInterpolator):
         self.method = method
         self.extrap = extrap
         self.period = period
-        self.even_spacing = even_spacing
         periodx, periody, periodz = _parse_ndarg(period, 3)
+        self.even_spacing = _detect_even_spacing(
+            even_spacing, (x, y, z), (periodx, periody, periodz)
+        )
 
         if fx is None:
             fx = _approx_df(x, f, method, axis[0], periodx, **kwargs)
@@ -505,7 +517,7 @@ def interp1d(
     derivative: int = 0,
     extrap: bool | float | tuple = False,
     period: None | float = None,
-    even_spacing: bool = False,
+    even_spacing: bool | None = False,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 1d function.
@@ -544,11 +556,12 @@ def interp1d(
     period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
-    even_spacing : bool
-        if True, user ensures that x is evenly spaced with constant
-        dx (there won't be internal checks). This helps finding the
-        neighboring points for the query positions faster. Defaults to False.
-        If periodic, x must cover one full period without the endpoint, e.g.
+    even_spacing : bool, None
+        Whether x is evenly spaced, which allows a faster lookup of the interval
+        containing each query point. If None, this is checked on each call. True skips
+        the check, and gives incorrect results if x is not evenly spaced. False always
+        uses a binary search. Defaults to False. If periodic, even spacing requires x to
+        cover one full period without the endpoint, e.g.
         ``np.linspace(0, period, N, endpoint=False)``.
     fx : ndarray, optional
         first derivatives of f with respect to x at the knots. For cubic methods, if
@@ -603,12 +616,7 @@ def interp1d(
         xq, x, f, fx = _make_periodic(xq, x, period, 0, f, fx)
         lowx = highx = True
 
-    # find the index
-    if not even_spacing:
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right").astype(int), 1, len(x) - 1)
-    else:
-        dx = x[1] - x[0]
-        i = jnp.clip(jnp.floor((xq - x[0]) / dx).astype(int) + 1, 1, len(x) - 1)
+    i = _find_cell(x, xq, even_spacing)
 
     if method == "nearest":
 
@@ -686,7 +694,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     derivative: int | tuple = 0,
     extrap: bool | float | tuple = False,
     period: None | float | tuple = None,
-    even_spacing: bool = False,
+    even_spacing: bool | None | tuple = False,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 2d function.
@@ -731,12 +739,14 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         periodicity of the function in x, y directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
-    even_spacing : bool
-        if True, user ensures that each array x, y is evenly spaced with constant
-        dx, dy (there won't be internal checks). This helps finding the
-        neighboring points for the query positions faster. Defaults to False.
-        Along periodic axes, the knots must cover one full period without the
-        endpoint, e.g. ``np.linspace(0, period, N, endpoint=False)``.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked on
+        each call. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to False. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fxy : ndarray, optional
         derivatives df/dx, df/dy, d2f/dxdy at the knots. For cubic methods, any that
         are given are used in place of the derivatives approximated by ``method``.
@@ -815,15 +825,9 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         yq, y, f, fx, fy, fxy = _make_periodic(yq, y, periody, 1, f, fx, fy, fxy)
         lowy = highy = True
 
-    # find the indices
-    if not even_spacing:
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right").astype(int), 1, len(x) - 1)
-        j = jnp.clip(jnp.searchsorted(y, yq, side="right").astype(int), 1, len(y) - 1)
-    else:
-        dx = x[1] - x[0]
-        dy = y[1] - y[0]
-        i = jnp.clip(jnp.floor((xq - x[0]) / dx).astype(int) + 1, 1, len(x) - 1)
-        j = jnp.clip(jnp.floor((yq - y[0]) / dy).astype(int) + 1, 1, len(y) - 1)
+    evenx, eveny = _parse_ndarg(even_spacing, 2)
+    i = _find_cell(x, xq, evenx)
+    j = _find_cell(y, yq, eveny)
 
     if method == "nearest":
 
@@ -927,7 +931,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     derivative: int | tuple = 0,
     extrap: bool | float | tuple = False,
     period: None | float | tuple = None,
-    even_spacing: bool = False,
+    even_spacing: bool | None | tuple = False,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 3d function.
@@ -976,12 +980,14 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         periodicity of the function in x, y, z directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in all directions.
-    even_spacing : bool
-        if True, user ensures that each array x, y, z is evenly spaced with constant
-        dx, dy and dz (there won't be internal checks). This helps finding the
-        neighboring points for the query positions faster. Defaults to False.
-        Along periodic axes, the knots must cover one full period without the
-        endpoint, e.g. ``np.linspace(0, period, N, endpoint=False)``.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked on
+        each call. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to False. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fz, fxy, fxz, fyz, fxyz : ndarray, optional
         derivatives df/dx, df/dy, df/dz, d2f/dxdy, d2f/dxdz, d2f/dydz, d3f/dxdydz at
         the knots. For cubic methods, any that are given are used in place of the
@@ -1096,18 +1102,10 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
         lowz = highz = True
 
-    # find the indices
-    if not even_spacing:
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right").astype(int), 1, len(x) - 1)
-        j = jnp.clip(jnp.searchsorted(y, yq, side="right").astype(int), 1, len(y) - 1)
-        k = jnp.clip(jnp.searchsorted(z, zq, side="right").astype(int), 1, len(z) - 1)
-    else:
-        dx = x[1] - x[0]
-        dy = y[1] - y[0]
-        dz = z[1] - z[0]
-        i = jnp.clip(jnp.floor((xq - x[0]) / dx).astype(int) + 1, 1, len(x) - 1)
-        j = jnp.clip(jnp.floor((yq - y[0]) / dy).astype(int) + 1, 1, len(y) - 1)
-        k = jnp.clip(jnp.floor((zq - z[0]) / dz).astype(int) + 1, 1, len(z) - 1)
+    evenx, eveny, evenz = _parse_ndarg(even_spacing, 3)
+    i = _find_cell(x, xq, evenx)
+    j = _find_cell(y, yq, eveny)
+    k = _find_cell(z, zq, evenz)
 
     if method == "nearest":
 
@@ -1285,6 +1283,78 @@ def _move_query_axes(fq: jax.Array, nq: int, axis: tuple[int, ...]) -> jax.Array
     """Move leading nq query dimensions to where the grid axes of f started."""
     start = min(axis)
     return jnp.moveaxis(fq, tuple(range(nq)), tuple(range(start, start + nq)))
+
+
+def _is_uniform(x: jax.Array) -> jax.Array:
+    """Whether the knots x are close enough to evenly spaced for a direct lookup."""
+    n = len(x)
+    dx = (x[-1] - x[0]) / (n - 1)
+    dev = jnp.max(jnp.abs(x - (x[0] + dx * jnp.arange(n, dtype=x.dtype))))
+    # every knot within a quarter spacing of the uniform grid means the direct guess
+    # is at most one cell off, even allowing for rounding in computing the guess, so
+    # a single correction step makes it exact.
+    return dev < dx / 4
+
+
+def _find_cell_uniform(x: jax.Array, xq: jax.Array) -> jax.Array:
+    n = len(x)
+    # spacing from the full extent rather than the first interval, so that rounding
+    # error in the spacing isn't amplified by the knot index.
+    dx = (x[-1] - x[0]) / (n - 1)
+    i = jnp.clip(jnp.floor((xq - x[0]) / dx).astype(int) + 1, 1, n - 1)
+    i = i + (x[i] <= xq) - (x[i - 1] > xq)
+    return jnp.clip(i, 1, n - 1)
+
+
+def _find_cell_search(x: jax.Array, xq: jax.Array) -> jax.Array:
+    # unrolling the binary search lets XLA fuse its steps, which is much faster than
+    # the default loop on accelerators.
+    i = jnp.searchsorted(x, xq, side="right", method="scan_unrolled")
+    return jnp.clip(i.astype(int), 1, len(x) - 1)
+
+
+def _find_cell(x: jax.Array, xq: jax.Array, even_spacing: bool | None) -> jax.Array:
+    """Find the index i such that x[i - 1] <= xq < x[i], clipped to [1, len(x) - 1].
+
+    Parameters
+    ----------
+    x : ndarray, shape(N,)
+        Monotonically increasing knots.
+    xq : ndarray, shape(Nq,)
+        Query points.
+    even_spacing : bool, None
+        Whether x is evenly spaced, in which case the index is computed directly
+        instead of by binary search. If None, this is checked at runtime.
+
+    Returns
+    -------
+    i : ndarray of int, shape(Nq,)
+        Index of the upper knot of the cell containing each query point.
+    """
+    if even_spacing is None:
+        return jax.lax.cond(
+            _is_uniform(x), _find_cell_uniform, _find_cell_search, x, xq
+        )
+    if even_spacing:
+        return _find_cell_uniform(x, xq)
+    return _find_cell_search(x, xq)
+
+
+def _detect_even_spacing(
+    even_spacing: bool | None | tuple, grids: tuple, periods: tuple
+) -> tuple:
+    """Resolve even_spacing per axis, checking concrete grids where it is None."""
+    out = []
+    for even, x, period in zip(_parse_ndarg(even_spacing, len(grids)), grids, periods):
+        if even is None:
+            if period is not None:
+                _, x = _make_periodic(x, x, period, 0)
+            try:
+                even = bool(_is_uniform(x))
+            except jax.errors.ConcretizationTypeError:
+                pass  # traced grid, so leave the check to each call
+        out.append(even)
+    return tuple(out)
 
 
 def _take_neighbor_data(f: jax.Array, *idx: jax.Array) -> jax.Array:

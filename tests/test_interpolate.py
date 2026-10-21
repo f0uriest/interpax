@@ -19,6 +19,7 @@ from interpax import (
     interp2d,
     interp3d,
 )
+from interpax._spline import _find_cell
 
 jax_config.update("jax_enable_x64", True)
 
@@ -124,8 +125,10 @@ class TestInterp1D:
         f = lambda x: np.array([np.sin(x), np.cos(x)])
         fp = f(xp).T
 
-        fq = interp1d(x, xp, fp, method="nearest", even_spacing=True)
-        np.testing.assert_allclose(fq, f(x).T, rtol=1e-2, atol=1e-1)
+        nearest = fp[np.argmin(np.abs(x[:, None] - xp[None]), axis=1)]
+        for even_spacing in [True, False]:
+            fq = interp1d(x, xp, fp, method="nearest", even_spacing=even_spacing)
+            np.testing.assert_allclose(fq, nearest)
 
         fq = interp1d(x, xp, fp, method="linear", even_spacing=True)
         np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-3)
@@ -733,6 +736,7 @@ def test_extrap_float():
     [
         (interp1d, Interpolator1D, -1, "cubic2", 1.1),
         (interp2d, Interpolator2D, (2, 0), "linear", None),
+        (interp2d, Interpolator2D, (2, 0), "cubic", (None, 1.1)),
         (interp3d, Interpolator3D, (3, 1, 0), "cubic", (1.1, None, 1.1)),
     ],
 )
@@ -786,3 +790,38 @@ if xb._backends:
         f"JAX backend was initialized during `import interpax`.\n"
         f"stderr: {result.stderr}"
     )
+
+
+@pytest.mark.unit
+def test_find_cell():
+    """Test cell lookup and detection of evenly spaced knots."""
+    rng = np.random.default_rng(0)
+    n = 500
+    s = np.linspace(0, 1, n)
+    grids = {
+        # far from the origin, so the first interval alone is a poor spacing estimate
+        "offset_f32": (np.linspace(1000, 1001, n, dtype=np.float32), True),
+        "nonuniform": (s**2, False),
+        # every knot moved by up to 0.3 spacings, beyond what the direct lookup allows
+        "perturbed": (s + rng.uniform(-0.3, 0.3, n) / (n - 1), False),
+    }
+    for name, (x, uniform) in grids.items():
+        x = jnp.asarray(x)
+        # knots, midpoints, and random points including some outside the range
+        u = jnp.asarray(rng.uniform(-0.1, 1.1, 1000), x.dtype)
+        xq = jnp.concatenate([x, (x[1:] + x[:-1]) / 2, x[0] + (x[-1] - x[0]) * u])
+        ref = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, n - 1)
+        for even in [None, False] + [True] * uniform:
+            np.testing.assert_array_equal(_find_cell(x, xq, even), ref, err_msg=name)
+        assert Interpolator1D(x, x, method="linear").even_spacing == uniform, name
+
+    x = np.linspace(0, 2 * np.pi, 20, endpoint=False)
+    assert Interpolator1D(x, x, period=2 * np.pi).even_spacing is True
+    y = np.linspace(0, 1, 30) ** 2
+    f = np.ones((20, 30))
+    assert Interpolator2D(x, y, f, period=(2 * np.pi, None)).even_spacing == (
+        True,
+        False,
+    )
+    interp = jax.jit(lambda x: Interpolator1D(x, x, method="linear"))(x)
+    assert interp.even_spacing is None
