@@ -10,11 +10,11 @@ interpax is a library for interpolation and function approximation using JAX.
 
 Includes methods for nearest neighbor, linear, and several cubic interpolation schemes
 in 1d, 2d, and 3d, as well as Fourier interpolation for periodic functions in
-1d and 2d. Also includes a scipy-like RBFInterpolator.
+1d and 2d. Also includes a scipy-like RBFInterpolator and smoothing splines for noisy data.
 
 Coming soon:
+
 - Spline interpolation for rectilinear grids in N-dimensions
-- Smoothing splines for noisy data
 
 
 Installation
