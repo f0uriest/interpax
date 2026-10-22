@@ -5,6 +5,9 @@ Changelog
 
 v0.3.16
 -------
+- Adds ``CubicSmoothingSpline``, a cubic smoothing spline for noisy data. The amount
+of smoothing is set by a normalized parameter ``p`` in [0, 1], as in csaps, and all
+the boundary conditions of ``CubicSpline`` are supported, including periodic.
 - Adds ``even_spacing`` option to ``interpXd`` and ``InterpolatorXD``. If the knots are
 evenly spaced, the interval containing each query point is computed directly instead
 of by binary search. ``InterpolatorXD`` detects evenly spaced knots automatically by

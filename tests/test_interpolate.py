@@ -10,6 +10,7 @@ import pytest
 from jax import config as jax_config
 
 from interpax import (
+    CubicSmoothingSpline,
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
@@ -830,3 +831,62 @@ def test_find_cell():
     )
     interp = jax.jit(lambda x: Interpolator1D(x, x, method="linear"))(x)
     assert interp.even_spacing is None
+
+
+def test_cubic_smoothing_spline():
+    """Test CubicSmoothingSpline against scipy and its limiting cases."""
+    from scipy.interpolate import make_smoothing_spline
+
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0, 3, 30))
+    y = np.sin(2 * x) + 0.1 * rng.normal(size=30)
+    w = rng.uniform(0.5, 2, 30)
+    xq = np.linspace(0, 3, 200)
+    Y = np.stack([y, 2 * y], axis=0)
+
+    # p is normalized by the knot spacing and weights before entering the objective
+    span = np.ptp(x)
+    eff_x = 1 + span**2 / np.sum(np.diff(x) ** 2)
+    eff_w = np.sum(w) ** 2 / np.sum(w**2)
+    k = 80 * span**3 * x.size**-2 * eff_x**-0.5 * eff_w**-0.5
+    for p in [0.01, 0.5, 0.99]:
+        pk = p / (p + (1 - p) * k)
+        ref = make_smoothing_spline(x, y, w=w, lam=(1 - pk) / pk)(xq)
+        out = CubicSmoothingSpline(x, Y, p=p, w=w, axis=1)(xq)
+        np.testing.assert_allclose(out, np.stack([ref, 2 * ref]), atol=1e-8)
+
+    line = np.polyval(np.polyfit(x, y, 1, w=np.sqrt(w)), xq)
+    np.testing.assert_allclose(
+        CubicSmoothingSpline(x, y, p=0, w=w)(xq), line, atol=1e-10
+    )
+    np.testing.assert_allclose(CubicSmoothingSpline(x, y, p=1)(x), y, atol=1e-10)
+    # with incompatible clamped slopes the smoothest admissible spline is a parabola
+    par = 5 * (x - x[0]) - (x - x[0]) ** 2 / np.ptp(x)
+    par += np.sum(w * (y - par)) / np.sum(w)
+    s = CubicSmoothingSpline(x, y, p=0, w=w, bc_type=((1, 5.0), (1, 3.0)))
+    np.testing.assert_allclose(s(x), par, atol=1e-7)
+
+    s = CubicSmoothingSpline(x, y, p=0.5, bc_type=((1, 5.0), (2, 1.0)))
+    np.testing.assert_allclose(s(x[0], nu=1), 5.0, atol=1e-10)
+    np.testing.assert_allclose(s(x[-1], nu=2), 1.0, atol=1e-10)
+
+    # derivative with respect to all inputs along a random direction, vs finite
+    # differences
+    def fun(t):
+        xt, yt, wt = x + t[0] * dx, y + t[1] * dy, w + t[2] * dw
+        bc = ((1, 5.0 + t[4]), (2, 1.0 - t[4]))
+        s = CubicSmoothingSpline(xt, yt, p=0.3 + t[3], w=wt, bc_type=bc, check=False)
+        return jnp.sum(s(xq) * cq) + jnp.sum(s(xq, nu=1) * cq[::-1])
+
+    dx = rng.normal(size=x.size) * np.diff(x).min() / 4
+    dy, dw = rng.normal(size=y.size), rng.normal(size=w.size) / 10
+    cq = rng.normal(size=xq.size)
+    t0 = jnp.zeros(5)
+    grad = jax.jit(jax.grad(fun))(t0)
+    # steps balance truncation error against roundoff from the closely spaced knots
+    eps = [1e-2, 1e-2, 1e-2, 1e-4, 1e-2]
+    fd = [
+        (fun(t0.at[i].set(e)) - fun(t0.at[i].set(-e))) / (2 * e)
+        for i, e in enumerate(eps)
+    ]
+    np.testing.assert_allclose(grad, fd, rtol=1e-3)

@@ -156,8 +156,26 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
 
 @eqx.filter_jit
 def _cubic2(x, f, axis, bc, dtype):
-    f = f.astype(dtype)
-    f = jnp.moveaxis(f, axis, 0)
+    f = jnp.moveaxis(f.astype(dtype), axis, 0)
+    lower, diag, upper, b, periodic = _cubic2_system(x, f, bc)
+    if periodic:
+        fx = _solve_cyclic_tridiagonal(lower, diag, upper, b)
+        fx = jnp.concatenate([fx, fx[:1]], axis=0)
+    else:
+        fx = _solve_tridiagonal(lower[1:], diag, upper[:-1], b)
+    return jnp.moveaxis(fx, 0, axis).astype(f.dtype)
+
+
+def _cubic2_system(x, f, bc):
+    """Assemble the linear system for the knot slopes of a C2 cubic spline.
+
+    Returns ``(lower, diag, upper, b, periodic)`` such that the slopes ``s`` satisfy
+    ``lower[i] * s[i-1] + diag[i] * s[i] + upper[i] * s[i+1] == b[i]``, with indices
+    taken modulo ``len(diag)``. For periodic splines the unknowns are the
+    ``len(f) - 1`` distinct slopes, otherwise ``lower[0] == upper[-1] == 0``.
+    ``f`` varies along axis 0, and ``b`` is affine in ``f``.
+    """
+    bc = list(bc)
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=0)
     dxr = dx.reshape([dx.shape[0]] + [1] * (f.ndim - 1))
@@ -180,154 +198,136 @@ def _cubic2(x, f, axis, bc, dtype):
     # as the both conditions are identical. We handle this case by
     # constructing a parabola passing through given points.
     if n == 3 and bc[0] == "not-a-knot" and bc[1] == "not-a-knot":
-        A = jnp.zeros((3, 3))  # This is a standard matrix.
-        b = jnp.empty((3,) + f.shape[1:], dtype=dtype)
+        one, zero = jnp.ones_like(dx[0]), jnp.zeros_like(dx[0])
+        lower = jnp.stack([zero, dx[1], one])
+        diag = jnp.stack([one, 2 * (dx[0] + dx[1]), one])
+        upper = jnp.stack([one, dx[0], zero])
+        b = jnp.stack(
+            [2 * df[0], 3 * (dxr[0] * df[1] + dxr[1] * df[0]), 2 * df[1]], axis=0
+        )
+        return lower, diag, upper, b, False
 
-        A = A.at[0, 0].set(1)
-        A = A.at[0, 1].set(1)
-        A = A.at[1, 0].set(dx[1])
-        A = A.at[1, 1].set(2 * (dx[0] + dx[1]))
-        A = A.at[1, 2].set(dx[0])
-        A = A.at[2, 1].set(1)
-        A = A.at[2, 2].set(1)
+    if bc[0] == "periodic":
+        # Since f[-1] == f[0], the last knot duplicates the first and there are only
+        # m = n-1 unknown slopes s[0..m-1]. The C2 condition at knot i, with indices
+        # taken mod m, is
+        # dx[i] * s[i-1] + 2 * (dx[i-1] + dx[i]) * s[i] + dx[i-1] * s[i+1] # noqa:ERA001
+        #   = 3 * (dx[i] * df[i-1] + dx[i-1] * df[i])                      # noqa:ERA001
+        # which is a cyclic tridiagonal system.
+        dx_prev = jnp.roll(dx, 1)
+        dxr_prev = jnp.roll(dxr, 1, axis=0)
+        b = 3 * (dxr * jnp.roll(df, 1, axis=0) + dxr_prev * df)
+        return dx, 2 * (dx_prev + dx), dx_prev, b, True
 
-        b = b.at[0].set(2 * df[0])
-        b = b.at[1].set(3 * (dxr[0] * df[1] + dxr[1] * df[0]))
-        b = b.at[2].set(2 * df[1])
+    diag = jnp.zeros(n, dtype=x.dtype)
+    diag = diag.at[1:-1].set(2 * (dx[:-1] + dx[1:]))
+    upper_diag = jnp.zeros(n - 1, dtype=x.dtype)
+    upper_diag = upper_diag.at[1:].set(dx[:-1])
+    lower_diag = jnp.zeros(n - 1, dtype=x.dtype)
+    lower_diag = lower_diag.at[:-1].set(dx[1:])
+    b = jnp.zeros((n,) + f.shape[1:], dtype=f.dtype)
+    b = b.at[1:-1].set(3 * (dxr[1:] * df[:-1] + dxr[:-1] * df[1:]))
 
-        solve = lambda b: jnp.linalg.solve(A, b)
-        fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
-        fx = jnp.moveaxis(fx, 0, axis)
+    bc_start, bc_end = bc
 
-    elif bc[0] == "periodic":
-        fx = _cubic2_periodic(dx, df)
-        fx = jnp.moveaxis(fx, 0, axis)
-
+    if bc_start == "not-a-knot":
+        d = x[2] - x[0]
+        diag = diag.at[0].set(dx[1])
+        upper_diag = upper_diag.at[0].set(d)
+        b = b.at[0].set(((dxr[0] + 2 * d) * dxr[1] * df[0] + dxr[0] ** 2 * df[1]) / d)
     else:
-        # Find derivative values at each x[i] by solving a tridiagonal
-        # system.
-        diag = jnp.zeros(n, dtype=x.dtype)
-        diag = diag.at[1:-1].set(2 * (dx[:-1] + dx[1:]))
-        upper_diag = jnp.zeros(n - 1, dtype=x.dtype)
-        upper_diag = upper_diag.at[1:].set(dx[:-1])
-        lower_diag = jnp.zeros(n - 1, dtype=x.dtype)
-        lower_diag = lower_diag.at[:-1].set(dx[1:])
-        b = jnp.zeros((n,) + f.shape[1:], dtype=dtype)
-        b = b.at[1:-1].set(3 * (dxr[1:] * df[:-1] + dxr[:-1] * df[1:]))
 
-        bc_start, bc_end = bc
+        def bc_start0(diag, upper_diag, b):
+            return diag, upper_diag, b
 
-        if bc_start == "not-a-knot":
-            d = x[2] - x[0]
-            diag = diag.at[0].set(dx[1])
-            upper_diag = upper_diag.at[0].set(d)
-            b = b.at[0].set(
-                ((dxr[0] + 2 * d) * dxr[1] * df[0] + dxr[0] ** 2 * df[1]) / d
-            )
-        else:
+        def bc_start1(diag, upper_diag, b):
+            diag = diag.at[0].set(1)
+            upper_diag = upper_diag.at[0].set(0)
+            b = b.at[0].set(bc_start[1])
+            return diag, upper_diag, b
 
-            def bc_start0(diag, upper_diag, b):
-                return diag, upper_diag, b
+        def bc_start2(diag, upper_diag, b):
+            diag = diag.at[0].set(2 * dx[0])
+            upper_diag = upper_diag.at[0].set(dx[0])
+            b = b.at[0].set(-0.5 * bc_start[1] * dx[0] ** 2 + 3 * (f[1] - f[0]))
+            return diag, upper_diag, b
 
-            def bc_start1(diag, upper_diag, b):
-                diag = diag.at[0].set(1)
-                upper_diag = upper_diag.at[0].set(0)
-                b = b.at[0].set(bc_start[1])
-                return diag, upper_diag, b
+        diag, upper_diag, b = jax.lax.cond(
+            bc_start[0] == 1, bc_start1, bc_start0, diag, upper_diag, b
+        )
+        diag, upper_diag, b = jax.lax.cond(
+            bc_start[0] == 2, bc_start2, bc_start0, diag, upper_diag, b
+        )
 
-            def bc_start2(diag, upper_diag, b):
-                diag = diag.at[0].set(2 * dx[0])
-                upper_diag = upper_diag.at[0].set(dx[0])
-                b = b.at[0].set(-0.5 * bc_start[1] * dx[0] ** 2 + 3 * (f[1] - f[0]))
-                return diag, upper_diag, b
+    if bc_end == "not-a-knot":
+        d = x[-1] - x[-3]
+        diag = diag.at[-1].set(dx[-2])
+        lower_diag = lower_diag.at[-1].set(d)
+        b = b.at[-1].set(
+            (dxr[-1] ** 2 * df[-2] + (2 * d + dxr[-1]) * dxr[-2] * df[-1]) / d
+        )
+    else:
 
-            diag, upper_diag, b = jax.lax.cond(
-                bc_start[0] == 1, bc_start1, bc_start0, diag, upper_diag, b
-            )
-            diag, upper_diag, b = jax.lax.cond(
-                bc_start[0] == 2, bc_start2, bc_start0, diag, upper_diag, b
-            )
+        def bc_end0(diag, lower_diag, b):
+            return diag, lower_diag, b
 
-        if bc_end == "not-a-knot":
-            d = x[-1] - x[-3]
-            diag = diag.at[-1].set(dx[-2])
-            lower_diag = lower_diag.at[-1].set(d)
-            b = b.at[-1].set(
-                (dxr[-1] ** 2 * df[-2] + (2 * d + dxr[-1]) * dxr[-2] * df[-1]) / d
-            )
-        else:
+        def bc_end1(diag, lower_diag, b):
+            diag = diag.at[-1].set(1)
+            lower_diag = lower_diag.at[-1].set(0)
+            b = b.at[-1].set(bc_end[1])
+            return diag, lower_diag, b
 
-            def bc_end0(diag, lower_diag, b):
-                return diag, lower_diag, b
+        def bc_end2(diag, lower_diag, b):
+            diag = diag.at[-1].set(2 * dx[-1])
+            lower_diag = lower_diag.at[-1].set(dx[-1])
+            b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
+            return diag, lower_diag, b
 
-            def bc_end1(diag, lower_diag, b):
-                diag = diag.at[-1].set(1)
-                lower_diag = lower_diag.at[-1].set(0)
-                b = b.at[-1].set(bc_end[1])
-                return diag, lower_diag, b
+        diag, lower_diag, b = jax.lax.cond(
+            bc_end[0] == 1, bc_end1, bc_end0, diag, lower_diag, b
+        )
+        diag, lower_diag, b = jax.lax.cond(
+            bc_end[0] == 2, bc_end2, bc_end0, diag, lower_diag, b
+        )
 
-            def bc_end2(diag, lower_diag, b):
-                diag = diag.at[-1].set(2 * dx[-1])
-                lower_diag = lower_diag.at[-1].set(dx[-1])
-                b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
-                return diag, lower_diag, b
+    # this is needed to avoid singular matrix when there are duplicate x coords
+    mask = diag == 0
+    diag = jnp.where(mask, 1, diag)
+    lower_diag = jnp.where(mask[1:], 0, lower_diag)
+    upper_diag = jnp.where(mask[:-1], 0, upper_diag)
+    b = jnp.where(mask, 0, b.T).T
 
-            diag, lower_diag, b = jax.lax.cond(
-                bc_end[0] == 1, bc_end1, bc_end0, diag, lower_diag, b
-            )
-            diag, lower_diag, b = jax.lax.cond(
-                bc_end[0] == 2, bc_end2, bc_end0, diag, lower_diag, b
-            )
-
-        # this is needed to avoid singular matrix when there are duplicate x coords
-        mask = diag == 0
-        diag = jnp.where(mask, 1, diag)
-        lower_diag = jnp.where(mask[1:], 0, lower_diag)
-        upper_diag = jnp.where(mask[:-1], 0, upper_diag)
-        b = jnp.where(mask, 0, b.T).T
-
-        # see https://github.com/patrick-kidger/lineax/issues/148
-        dtype = jnp.result_type(diag, lower_diag, upper_diag, b)
-        diag = diag.astype(dtype)
-        lower_diag = lower_diag.astype(dtype)
-        upper_diag = upper_diag.astype(dtype)
-        b = b.astype(dtype)
-
-        A = lx.TridiagonalLinearOperator(diag, lower_diag, upper_diag)
-
-        # throw=False skips lineax's error check, whose host callback can cause a
-        # cache miss on every call under jit. The system is nonsingular by
-        # construction, so there is no failure to report.
-        solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal(), throw=False).value
-        fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
-        fx = jnp.moveaxis(fx, 0, axis)
-    return fx.astype(f.dtype)
+    lower = jnp.concatenate([jnp.zeros(1, lower_diag.dtype), lower_diag])
+    upper = jnp.concatenate([upper_diag, jnp.zeros(1, upper_diag.dtype)])
+    return lower, diag, upper, b, False
 
 
-def _cubic2_periodic(dx, df):
-    # Since f[-1] == f[0], the last knot duplicates the first and there are only
-    # m = n-1 unknown slopes s[0..m-1]. The C2 condition at knot i, with indices
-    # taken mod m, is
-    #   dx[i] * s[i-1] + 2 * (dx[i-1] + dx[i]) * s[i] + dx[i-1] * s[i+1]  # noqa:ERA001
-    #     = 3 * (dx[i] * df[i-1] + dx[i-1] * df[i])                       # noqa:ERA001
-    # which is a cyclic tridiagonal system.
-    m = dx.shape[0]
-    dxr = dx.reshape([m] + [1] * (df.ndim - 1))
-    dx_prev = jnp.roll(dx, 1)
-    dxr_prev = jnp.roll(dxr, 1, axis=0)
-    b = 3 * (dxr * jnp.roll(df, 1, axis=0) + dxr_prev * df)
+def _solve_tridiagonal(lower, diag, upper, b):
+    # see https://github.com/patrick-kidger/lineax/issues/148
+    dtype = jnp.result_type(diag, lower, upper, b)
+    A = lx.TridiagonalLinearOperator(
+        diag.astype(dtype), lower.astype(dtype), upper.astype(dtype)
+    )
+    # throw=False skips lineax's error check, whose host callback can cause a
+    # cache miss on every call under jit. The system is nonsingular by
+    # construction, so there is no failure to report.
+    solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal(), throw=False).value
+    return jnp.vectorize(solve, signature="(n)->(n)")(b.astype(dtype).T).T
 
+
+def _solve_cyclic_tridiagonal(lower, diag, upper, b):
+    # Solves the system in the convention of _cubic2_system, where lower[0] and
+    # upper[-1] are the corner entries coupling the first and last unknowns.
+    m = diag.shape[0]
     if m == 2:
         # Both rows couple s[0] and s[1] through the same entries, so the system
         # isn't tridiagonal with distinct corners. Its solution is s[0] == s[1].
-        s = b[:1] / (3 * (dxr[0] + dxr[1]))
-        return jnp.concatenate([s, s, s], axis=0)
+        s = b[:1] / (diag[0] + lower[0] + upper[0])
+        return jnp.concatenate([s, s], axis=0)
 
-    diag = 2 * (dx_prev + dx)
-    lower_diag = dx[1:]  # coefficient of s[i-1] in row i
-    upper_diag = dx_prev[:-1]  # coefficient of s[i+1] in row i
-    corner_top = dx[0]  # coefficient of s[m-1] in row 0
-    corner_bot = dx_prev[-1]  # coefficient of s[0] in row m-1
+    corner_top = lower[0]  # coefficient of s[m-1] in row 0
+    corner_bot = upper[-1]  # coefficient of s[0] in row m-1
+    lower, upper = lower[1:], upper[:-1]
 
     # Sherman-Morrison: A = T + u v^T, where T is tridiagonal and u v^T holds the
     # corner entries. The system is strictly diagonally dominant, so gamma = -diag[0]
@@ -338,18 +338,10 @@ def _cubic2_periodic(dx, df):
     u = jnp.zeros(m, dtype=diag.dtype).at[0].set(gamma).at[-1].set(corner_bot)
     v = jnp.zeros(m, dtype=diag.dtype).at[0].set(1).at[-1].set(corner_top / gamma)
 
-    # see https://github.com/patrick-kidger/lineax/issues/148
-    dtype = jnp.result_type(diag, b)
-    T = lx.TridiagonalLinearOperator(
-        diag.astype(dtype), lower_diag.astype(dtype), upper_diag.astype(dtype)
-    )
-    # throw=False skips lineax's error check, see _cubic2
-    solve = lambda rhs: lx.linear_solve(T, rhs, lx.Tridiagonal(), throw=False).value
-    z = solve(u.astype(dtype))
-    y = jnp.vectorize(solve, signature="(n)->(n)")(b.astype(dtype).T).T
+    z = _solve_tridiagonal(lower, diag, upper, u)
+    y = _solve_tridiagonal(lower, diag, upper, b)
     coef = jnp.tensordot(v, y, axes=1) / (1 + v @ z)
-    s = y - z.reshape([m] + [1] * (y.ndim - 1)) * coef
-    return jnp.concatenate([s, s[:1]], axis=0)
+    return y - z.reshape([m] + [1] * (y.ndim - 1)) * coef
 
 
 @eqx.filter_jit
