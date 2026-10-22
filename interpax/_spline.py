@@ -1191,6 +1191,7 @@ def _move_query_axes(fq: jax.Array, nq: int, axis: tuple[int, ...]) -> jax.Array
     return jnp.moveaxis(fq, tuple(range(nq)), tuple(range(start, start + nq)))
 
 
+@jit
 def _is_uniform(x: jax.Array) -> jax.Array:
     """Whether the knots x are close enough to evenly spaced for a direct lookup."""
     n = len(x)
@@ -1284,6 +1285,7 @@ def _move_grid_axes(
     return tuple(None if a is None else jnp.moveaxis(a, axis, lead) for a in arrs)
 
 
+@eqx.filter_jit
 def _stack_fields(
     f: jax.Array,
     *derivs: jax.Array | None,
@@ -1434,6 +1436,7 @@ def _take_neighbor_data(f: jax.Array, *idx: jax.Array) -> jax.Array:
     return jax.vmap(take, out_axes=n)(*idx)
 
 
+@eqx.filter_jit
 def _approx_df(
     x: jax.Array,
     f: jax.Array,

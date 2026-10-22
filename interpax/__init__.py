@@ -6,6 +6,7 @@ from ._fourier import fft_interp1d, fft_interp2d
 from ._ppoly import (
     Akima1DInterpolator,
     CubicHermiteSpline,
+    CubicSmoothingSpline,
     CubicSpline,
     PchipInterpolator,
     PPoly,
@@ -27,6 +28,7 @@ __all__ = [
     "fft_interp2d",
     "Akima1DInterpolator",
     "CubicHermiteSpline",
+    "CubicSmoothingSpline",
     "CubicSpline",
     "PchipInterpolator",
     "PPoly",

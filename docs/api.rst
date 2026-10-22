@@ -28,6 +28,7 @@ except where noted in the documentation.
 
     interpax.Akima1DInterpolator
     interpax.CubicHermiteSpline
+    interpax.CubicSmoothingSpline
     interpax.CubicSpline
     interpax.PchipInterpolator
     interpax.PPoly

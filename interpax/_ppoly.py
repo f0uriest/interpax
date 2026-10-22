@@ -40,10 +40,17 @@ from collections.abc import Iterable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
 from ._coefs import A_CUBIC
-from ._fd_derivs import approx_df
+from ._fd_derivs import (
+    _cubic2_system,
+    _solve_cyclic_tridiagonal,
+    _solve_tridiagonal,
+    _validate_bc,
+    approx_df,
+)
 from .utils import asarray_inexact, errorif, wrap_jit
 
 
@@ -253,6 +260,7 @@ class PPoly(eqx.Module):
             y = y.transpose(l)
         return y
 
+    @wrap_jit(static_argnames=("nu",))
     def derivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the derivative.
 
@@ -292,6 +300,7 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, self.extrapolate, self.axis)
 
+    @wrap_jit(static_argnames=("nu",))
     def antiderivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the antiderivative.
 
@@ -339,6 +348,7 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, extrapolate, self.axis)
 
+    @wrap_jit(static_argnames=("extrapolate",))
     def integrate(
         self, a: Real, b: Real, extrapolate: bool | str | None = None
     ) -> Inexact[Array, ""]:
@@ -688,7 +698,7 @@ def _real_roots(
 def prepare_input(x, y, axis, dydx=None, check=True):
     """Prepare input for cubic spline interpolators.
 
-    All data are converted to numpy arrays and checked for correctness.
+    All data are converted to jax arrays and their shapes and dtypes are checked.
     Axes equal to `axis` of arrays `y` and `dydx` are moved to be the 0th
     axis. The value of `axis` is converted to lie in
     [0, number of dimensions of `y`).
@@ -721,26 +731,70 @@ def prepare_input(x, y, axis, dydx=None, check=True):
             ValueError,
             f"The length of `y` along `axis`={axis} doesn't match the length of `x`",
         )
-        errorif(
-            not jnp.all(jnp.isfinite(x)),
-            ValueError,
-            "`x` must contain only finite values.",
-        )
-        errorif(
-            not jnp.all(jnp.isfinite(y)),
-            ValueError,
-            "`y` must contain only finite values.",
-        )
-        errorif(
-            (dydx is not None) and (not jnp.all(jnp.isfinite(dydx))),
-            ValueError,
-            "`dydx` must contain only finite values.",
-        )
-        errorif(
-            jnp.any(dx <= 0), ValueError, "`x` must be strictly increasing sequence."
-        )
 
     return x, dx, y, axis, dydx
+
+
+@jax.jit
+def _value_flags(x, y, dydx):
+    def finite(a):
+        return jnp.asarray(True) if a is None else jnp.all(jnp.isfinite(a))
+
+    return finite(x), finite(y), finite(dydx), jnp.all(jnp.diff(x) > 0)
+
+
+def _check_values(x, y, dydx=None):
+    # Checks that depend on the data values rather than their shapes, which need
+    # concrete arrays and so are done outside of the jitted constructors. The
+    # reductions are computed together in a single compiled call.
+    x_finite, y_finite, dydx_finite, increasing = _value_flags(x, y, dydx)
+    errorif(not x_finite, ValueError, "`x` must contain only finite values.")
+    errorif(not y_finite, ValueError, "`y` must contain only finite values.")
+    errorif(not dydx_finite, ValueError, "`dydx` must contain only finite values.")
+    errorif(not increasing, ValueError, "`x` must be strictly increasing sequence.")
+
+
+@eqx.filter_jit
+def _cubic_hermite(x, y, dydx, axis, check):
+    x, dx, y, axis, dydx = prepare_input(x, y, axis, dydx, check)
+    assert dydx is not None
+    y = jnp.moveaxis(y, axis, 0)
+    dydx = jnp.moveaxis(dydx, axis, 0)
+    dxr = dx.reshape([dx.shape[0]] + [1] * (y.ndim - 1))
+    F = jnp.stack([y[:-1], y[1:], dydx[:-1] * dxr, dydx[1:] * dxr], axis=0).T
+    c = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F)[..., ::-1]
+    # handle non-uniform spacing
+    c = c / (dx[:, None] ** jnp.arange(4)[::-1])
+    # c has shape (..., m, k) for m knots and order k
+    c = c.T  # (k, m, ...)
+    # c.shape = (k, m, ...), but we want it to be (..., k, m, ...)
+    #                                                   ^
+    #                                                  axis
+    # So we roll two of them.
+    c = jnp.moveaxis(c, 0, axis + 1)  # (m, ..., k)
+    c = jnp.moveaxis(c, 0, axis + 1)  # (..., k, m, ...)
+    return c, x
+
+
+@eqx.filter_jit
+def _pchip(x, y, axis, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    dydx = approx_df(x, y, "monotonic", axis=axis)
+    return _cubic_hermite(x, y, dydx, axis, check)
+
+
+@eqx.filter_jit
+def _akima(x, y, axis, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    dydx = approx_df(x, y, method="akima", axis=axis)
+    return _cubic_hermite(x, y, dydx, axis, check)
+
+
+@eqx.filter_jit
+def _cubic_spline(x, y, axis, bc_type, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    dydx = approx_df(x, y, "cubic2", axis, bc_type=bc_type)
+    return _cubic_hermite(x, y, dydx, axis, check)
 
 
 class CubicHermiteSpline(PPoly):
@@ -790,27 +844,11 @@ class CubicHermiteSpline(PPoly):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ) -> None:
-        if extrapolate is None:
-            extrapolate = True
-
-        x, dx, y, axis, dydx = prepare_input(x, y, axis, dydx, check)
-
-        y = jnp.moveaxis(y, axis, 0)
-        dydx = jnp.moveaxis(dydx, axis, 0)
-        dxr = dx.reshape([dx.shape[0]] + [1] * (y.ndim - 1))
-        F = jnp.stack([y[:-1], y[1:], dydx[:-1] * dxr, dydx[1:] * dxr], axis=0).T
-        c = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F)[..., ::-1]
-        # handle non-uniform spacing
-        c = c / (dx[:, None] ** jnp.arange(4)[::-1])
-        # c has shape (..., m, k) for m knots and order k
-        c = c.T  # (k, m, ...)
-        # c.shape = (k, m, ...), but we want it to be (..., k, m, ...)
-        #                                                   ^
-        #                                                  axis
-        # So we roll two of them.
-        c = jnp.moveaxis(c, 0, axis + 1)  # (m, ..., k)
-        c = jnp.moveaxis(c, 0, axis + 1)  # (..., k, m, ...)
-        super().__init__(c, x, extrapolate=extrapolate, axis=axis, check=check)
+        x, y, dydx = map(asarray_inexact, (x, y, dydx))
+        if check:
+            _check_values(x, y, dydx)
+        c, x = _cubic_hermite(x, y, dydx, axis, check)
+        super().__init__(c, x, extrapolate=extrapolate, axis=axis, check=False)
 
 
 class PchipInterpolator(CubicHermiteSpline):
@@ -891,9 +929,11 @@ class PchipInterpolator(CubicHermiteSpline):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ):
-        x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
-        dydx = approx_df(x, y, "monotonic", axis=axis)
-        super().__init__(x, y, dydx, axis=axis, extrapolate=extrapolate, check=check)
+        x, y = map(asarray_inexact, (x, y))
+        if check:
+            _check_values(x, y)
+        c, x = _pchip(x, y, axis, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)
 
 
 class Akima1DInterpolator(CubicHermiteSpline):
@@ -949,9 +989,11 @@ class Akima1DInterpolator(CubicHermiteSpline):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ):
-        x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
-        t = approx_df(x, y, method="akima", axis=axis)
-        super().__init__(x, y, t, axis=axis, extrapolate=extrapolate, check=check)
+        x, y = map(asarray_inexact, (x, y))
+        if check:
+            _check_values(x, y)
+        c, x = _akima(x, y, axis, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)
 
 
 class CubicSpline(CubicHermiteSpline):
@@ -1048,18 +1090,503 @@ class CubicSpline(CubicHermiteSpline):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ):
-        x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+        x, y = map(asarray_inexact, (x, y))
         periodic = isinstance(bc_type, str) and bc_type == "periodic"
+        if check:
+            _check_values(x, y)
+            if periodic:
+                errorif(
+                    not jnp.allclose(
+                        jnp.take(y, 0, axis),
+                        jnp.take(y, -1, axis),
+                        rtol=1e-15,
+                        atol=1e-15,
+                    ),
+                    ValueError,
+                    f"The first and last `y` point along axis {axis} must be identical "
+                    "(within machine precision) when bc_type='periodic'.",
+                )
         if extrapolate is None:
             extrapolate = "periodic" if periodic else True
-        if check and periodic:
-            errorif(
-                not jnp.allclose(
-                    jnp.take(y, 0, axis), jnp.take(y, -1, axis), rtol=1e-15, atol=1e-15
-                ),
-                ValueError,
-                f"The first and last `y` point along axis {axis} must be identical "
-                "(within machine precision) when bc_type='periodic'.",
-            )
-        df = approx_df(x, y, "cubic2", axis, bc_type=bc_type)
-        super().__init__(x, y, df, axis=axis, extrapolate=extrapolate, check=check)
+        c, x = _cubic_spline(x, y, axis, bc_type, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)
+
+
+# Banded matrices are stored cyclically: band[i, k + q] = A[i, (i + k) % n] for
+# |k| <= q. Non-cyclic matrices keep the entries that wrap around equal to zero.
+
+
+def _band_matmul(A, B):
+    n = A.shape[0]
+    qa, qb = (A.shape[1] - 1) // 2, (B.shape[1] - 1) // 2
+    q = qa + qb
+    out = jnp.zeros((n, 2 * q + 1), jnp.result_type(A, B))
+    for a in range(-qa, qa + 1):
+        Bs = jnp.roll(B, -a, axis=0)
+        for b in range(-qb, qb + 1):
+            out = out.at[:, a + b + q].add(A[:, a + qa] * Bs[:, b + qb])
+    return out
+
+
+def _band_transpose(A):
+    q = (A.shape[1] - 1) // 2
+    return jnp.stack([jnp.roll(A[:, q - k], -k) for k in range(-q, q + 1)], axis=1)
+
+
+def _band_matvec(A, v):
+    q = (A.shape[1] - 1) // 2
+    shp = (-1,) + (1,) * (v.ndim - 1)
+    out = jnp.zeros(v.shape, jnp.result_type(A, v))
+    for k in range(-q, q + 1):
+        out = out + A[:, k + q].reshape(shp) * jnp.roll(v, -k, axis=0)
+    return out
+
+
+def _band_pad(A, q):
+    p = q - (A.shape[1] - 1) // 2
+    return jnp.pad(A, ((0, 0), (p, p)))
+
+
+def _band_to_dense(A):
+    n, q = A.shape[0], (A.shape[1] - 1) // 2
+    rows = np.arange(n)[:, None]
+    cols = (rows + np.arange(-q, q + 1)) % n
+    return jnp.zeros((n, n), A.dtype).at[rows, cols].add(A)
+
+
+def _band_pin(A, J):
+    # replace rows and columns J with those of the identity
+    n, q = A.shape[0], (A.shape[1] - 1) // 2
+    i = np.arange(n)[:, None]
+    cols = (i + np.arange(-q, q + 1)) % n
+    mask = np.isin(i, J) | np.isin(cols, J)
+    return (A * ~mask).at[J, q].set(1)
+
+
+def _band_columns(A, J):
+    # columns J of a banded matrix, as a dense (n, len(J)) array
+    n, q = A.shape[0], (A.shape[1] - 1) // 2
+    out = jnp.zeros((n, len(J)), A.dtype)
+    for c, j in enumerate(J):
+        for k in range(-q, q + 1):
+            i = (j - k) % n
+            out = out.at[i, c].add(A[i, k + q])
+    return out
+
+
+def _solve_banded_symmetric(A, b):
+    # Block LU of a non-cyclic symmetric banded matrix, treated as block tridiagonal
+    # with blocks of size q and pivoting only within blocks. Unlike Cholesky this
+    # needs no square roots, so roundoff in severely ill conditioned systems degrades
+    # the solution gradually instead of producing NaN.
+    n, w = A.shape
+    q = (w - 1) // 2
+    nb = -(-n // q)
+    pad = nb * q - n
+    A = jnp.concatenate([A, jnp.zeros((pad, w), A.dtype).at[:, q].set(1)])
+    b = jnp.concatenate([b, jnp.zeros((pad,) + b.shape[1:], b.dtype)])
+    r = np.arange(q)
+    rows = np.arange(nb)[:, None, None] * q + r[None, :, None]
+    off = r[None, None, :] - r[None, :, None]
+    D = A[rows, off + q]  # diagonal blocks
+    Lo = jnp.where(off >= 0, A[rows[1:], np.maximum(off, 0)], 0)  # subdiagonal
+    dtype = jnp.result_type(A, b)
+    D = D.astype(dtype)
+    Lo = Lo.astype(dtype)
+    rb = b.reshape(nb, q, -1).astype(dtype)
+
+    def forward(carry, xs):
+        Sp, zp = carry
+        Di, Li, ri = xs
+        G = jnp.linalg.solve(Sp, jnp.concatenate([Li.T, zp], axis=1))
+        S = Di - Li @ G[:, :q]
+        z = ri - Li @ G[:, q:]
+        return (S, z), (S, z)
+
+    _, (Ss, zs) = jax.lax.scan(forward, (D[0], rb[0]), (D[1:], Lo, rb[1:]))
+    Ss = jnp.concatenate([D[:1], Ss])
+    zs = jnp.concatenate([rb[:1], zs])
+
+    def backward(xn, xs):
+        S, Ln, z = xs
+        xi = jnp.linalg.solve(S, z - Ln.T @ xn)
+        return xi, xi
+
+    xl = jnp.linalg.solve(Ss[-1], zs[-1])
+    _, xs = jax.lax.scan(backward, xl, (Ss[:-1], Lo, zs[:-1]), reverse=True)
+    x = jnp.concatenate([xs, xl[None]]).reshape((nb * q,) + b.shape[1:])
+    return x[:n]
+
+
+def _solve_cyclic_banded_spd(A, b):
+    # Solve K x = b for symmetric positive definite K in cyclic banded storage.
+    n, q = A.shape[0], (A.shape[1] - 1) // 2
+    if n <= 4 * q:
+        return jnp.linalg.solve(_band_to_dense(A), b.astype(jnp.result_type(A, b)))
+    # The entries that wrap around form a corner block C = K[:q, -q:]. Writing
+    # K = Kt - Y G Y^T with Y = [I; -C^T / g] and G = g I gives a non-cyclic banded
+    # Kt = K + Y G Y^T, which is positive definite since K is, so x follows from
+    # banded solves and the Woodbury identity. Taking g = max|C| keeps the update
+    # comparable to the entries it replaces, so the Woodbury correction doesn't
+    # suffer from cancellation.
+    k = np.arange(-q, q + 1)
+    i = np.arange(n)[:, None]
+    wrap = (i + k < 0) | (i + k >= n)
+    a, kk = np.nonzero(wrap[:q])
+    C = jnp.zeros((q, q), A.dtype).at[a, a + k[kk] + q].add(A[a, kk])
+    g = jnp.max(jnp.abs(C))
+    # a corner that is negligible relative to K is dropped instead
+    coupled = g > jnp.finfo(A.dtype).eps * jnp.max(jnp.abs(A))
+    g = jnp.where(coupled, g, 1)
+    At = (A * ~wrap).at[:q, q].add(coupled * g)
+    a, c = np.nonzero(np.ones((q, q)))
+    At = At.at[n - q + a, c - a + q].add(coupled * (C.T @ C)[a, c] / g)
+    Y = jnp.zeros((n, q), A.dtype).at[:q].set(jnp.eye(q)).at[n - q :].set(-C.T / g)
+    dtype = jnp.result_type(Y, b)
+    rhs = jnp.concatenate([Y.astype(dtype), b.reshape(n, -1).astype(dtype)], axis=1)
+    sol = _solve_banded_symmetric(At, rhs)
+    Z, z = sol[:, :q], sol[:, q:].reshape(b.shape)
+    cap = jnp.where(coupled, jnp.eye(q) / g - Y.T @ Z, jnp.eye(q))
+    corr = Z @ jnp.linalg.solve(cap, (Y.T @ z.reshape(n, -1)).astype(z.dtype))
+    return z + coupled * corr.reshape(z.shape)
+
+
+def _smoothing_null_space(Bt, bc, n, periodic):
+    # Basis Z for the null space of Q, given its interval form Bt, and indices J
+    # with Z_J invertible.
+    N = Bt.shape[0]
+    # Q v = 0 means Bt^T v = 0, which makes v constant over the interior rows, so the
+    # null space Z of Q is set by the end rows. It contains a vector concentrated at
+    # an end exactly when straight lines satisfy the homogeneous boundary condition
+    # there, and otherwise a single vector spanning both ends. J holds one index per
+    # null vector where Z_J is invertible.
+    if periodic:
+        Z = jnp.ones((N, 1), Bt.dtype)
+        J = np.array([0])
+    else:
+        line_ok = [isinstance(b, str) or b[0] == 2 for b in bc]
+        if n == 3 and bc[0] == "not-a-knot" and bc[1] == "not-a-knot":
+            line_ok = [True, True]
+        if all(line_ok):
+            J = np.array([0, N - 1])
+        else:
+            J = np.array([N - 1 if line_ok[1] else 0])
+        if n >= 5:
+            # the end rows only reach intervals 0, 1 and n-3, n-2, giving
+            #   v[1] = a0 v[0],  v[i] = c for 2 <= i <= n-3,  c = (a0 + a1) v[0]
+            #   v[n-2] = -b1 v[n-1],  c = -(b0 + b1) v[n-1]
+            # where a and b are the interval weights of the first and last rows
+            a0, a1 = Bt[0, 2], Bt[0, 3]
+            b0, b1 = Bt[-1, 0], Bt[-1, 1]
+            a = 0 if line_ok[0] else a0 + a1
+            b = 0 if line_ok[1] else -(b0 + b1)
+
+            def null_vector(v0, c, vn):
+                z = jnp.full(N, c, Bt.dtype)
+                z = z.at[0].set(v0).at[1].set(a0 * v0)
+                return z.at[-2].set(-b1 * vn).at[-1].set(vn)
+
+            if all(line_ok):
+                Z = jnp.stack([null_vector(1, 0, 0), null_vector(0, 0, 1)], axis=1)
+            elif line_ok[1]:
+                Z = null_vector(0, 0, 1)[:, None]
+            elif line_ok[0]:
+                Z = null_vector(1, 0, 0)[:, None]
+            else:
+                Z = null_vector(1 / a, 1, 1 / b)[:, None]
+        else:
+            Btd = _band_to_dense(Bt)[:, : n - 1]
+            Z = jnp.linalg.svd(Btd.T)[2][-len(J) :].T
+
+    return Z, J
+
+
+@eqx.filter_jit
+def _smoothing_spline(x, y, w, p, bc):
+    # Knot values and slopes of the smoothing spline, with y varying along axis 0
+    # and bc as returned by _validate_bc.
+    dtype = y.dtype
+    n = x.size
+    h = jnp.diff(x)
+    periodic = isinstance(bc[0], str) and bc[0] == "periodic" and n > 2
+    rdtype = h.dtype
+
+    # For periodic splines the last knot duplicates the first, leaving N = n-1
+    # independent knots, each data site contributing to the knot it falls on.
+    N = n - 1 if periodic else n
+    knot = jnp.arange(n) % N
+    wN = jnp.zeros(N, w.dtype).at[knot].add(w)
+    shp = (-1,) + (1,) * (y.ndim - 1)
+    yN = jnp.zeros((N,) + y.shape[1:], dtype).at[knot].add(w.reshape(shp) * y)
+    yN = (yN / wN.reshape(shp)).reshape(N, -1)
+
+    # The spline is parametrized by knot values f and second derivatives m, so
+    # int f''^2 = m^T M m with M tridiagonal, and C1 continuity at interior knots
+    # reads M m = Q^T f. Matrices are banded, with cyclic wrap when periodic.
+    iv = jnp.arange(n - 1) % N
+    jv = (iv + 1) % N
+    M = jnp.zeros((N, 3), rdtype)
+    M = M.at[iv, 1].add(h / 3).at[jv, 1].add(h / 3)
+    M = M.at[iv, 2].add(h / 6).at[jv, 0].add(h / 6)
+    Qt = jnp.zeros((N, 5), rdtype)
+    Qt = Qt.at[iv, 3].add(1 / h).at[iv, 2].add(-1 / h)
+    Qt = Qt.at[jv, 2].add(-1 / h).at[jv, 1].add(1 / h)
+    # The same conditions in terms of the interval slopes D = (f[j] - f[i]) / h,
+    # Q^T f = Bt D, where Bt is banded over intervals. Applying Q this way takes
+    # differences before dividing by h, which avoids cancellation when knots are
+    # closely spaced.
+    Bt = jnp.zeros((N, 5), rdtype).at[iv, 2].add(1).at[jv, 1].add(-1)
+    A = M
+    g = jnp.zeros((N, yN.shape[1]), dtype)
+
+    if not periodic:
+        # The boundary conditions replace the C1 condition in the first and last
+        # rows. They come from the C2 system for the knot slopes s, whose end
+        # rows involve two slopes each, rewritten using
+        #   s[i] = D - h (2 m[i] + m[i+1]) / 6
+        #   s[i+1] = D + h (m[i] + 2 m[i+1]) / 6
+        # on the end intervals, where D = (f[i+1] - f[i]) / h.
+        # each end row of the slope system depends on at most 3 knot values, so
+        # its dependence on f is found exactly by probing only the end knots. The
+        # system is traced once, giving the matrix, the offset at f = 0 and the
+        # probed columns together.
+        ends = np.unique(np.r_[np.arange(min(3, n)), np.arange(max(n - 3, 0), n)])
+        probes = jnp.zeros((len(ends),) + y.shape, dtype)
+        probes = probes.at[np.arange(len(ends)), ends].set(1)
+
+        def system(f):
+            return _cubic2_system(x, f, bc)[:4]
+
+        def probe(t):
+            return jax.jvp(system, (jnp.zeros_like(y),), (t,))
+
+        (lower, diag, upper, b0), (_, _, _, db) = jax.vmap(probe)(probes)
+        lower, diag, upper = lower[0], diag[0], upper[0]
+        b0 = b0[0][np.array([0, -1])].reshape(2, -1)
+        G = db[:, np.array([0, -1])].reshape(len(ends), 2, -1)[:, :, 0].T.real
+        for e, (row, lo, c0, c1, he) in enumerate(
+            [
+                (0, 0, diag[0], upper[0], h[0]),
+                (n - 1, n - 2, lower[-1], diag[-1], h[-1]),
+            ]
+        ):
+            am = jnp.stack([he * (c1 - 2 * c0), he * (2 * c1 - c0)]) / 6
+            qrow = jnp.zeros(5, rdtype)
+            for col, val in zip(ends, G[e]):
+                if abs(col - row) <= 2:
+                    qrow = qrow.at[col - row + 2].add(val)
+            qrow = qrow.at[lo - row + 2].add((c0 + c1) / he)
+            qrow = qrow.at[lo + 1 - row + 2].add(-(c0 + c1) / he)
+            # cancellation between the two terms leaves roundoff where the
+            # condition doesn't involve f at all, which is removed here
+            tol = 16 * jnp.finfo(rdtype).eps * jnp.abs(c0 + c1) / he
+            qrow = jnp.where(jnp.abs(qrow) <= tol, 0, qrow)
+            # rescale the row to match the others, which doesn't change the
+            # condition but keeps the linear system well balanced
+            scale = M[row, 1] / jnp.max(jnp.abs(am))
+            A = A.at[row].set(0).at[row, lo - row + 1].set(scale * am[0])
+            A = A.at[row, lo + 1 - row + 1].set(scale * am[1])
+            Qt = Qt.at[row].set(scale * qrow)
+            # the row annihilates constants, so it's a combination of interval
+            # slopes with weights h[i] * sum(qrow[c] for c > i)
+            brow = jnp.zeros(5, rdtype)
+            last = min(row + 2, n - 1)
+            for i in range(max(row - 2, 0), last):
+                tail = sum(qrow[c - row + 2] for c in range(i + 1, last + 1))
+                brow = brow.at[i - row + 2].set(h[i] * tail)
+            Bt = Bt.at[row].set(scale * brow)
+            g = g.at[row].set(scale * b0[e])
+
+    # A differs from M only in the end rows, so with A = M + U D^T where U picks
+    # the first and last rows, A M^-1 A^T = A + A^T - M + U (D^T M^-1 D) U^T,
+    # which is banded apart from the coupling between the first and last rows.
+    AMA = A + _band_transpose(A) - M
+    if not periodic:
+        # columns of D, i.e. the first and last rows of A - M
+        k = np.arange(-1, 2)
+        Dm = jnp.zeros((N, 2), rdtype)
+        Dm = Dm.at[k % N, 0].add((A - M)[0]).at[(N - 1 + k) % N, 1].add((A - M)[-1])
+        S = Dm.T @ _solve_tridiagonal(M[1:, 0], M[:, 1], M[:-1, 2], Dm)
+        S01 = (S[0, 1] + S[1, 0]) / 2
+        AMA = AMA.at[0, 1].add(S[0, 0]).at[-1, 1].add(S[1, 1])
+        AMA = AMA.at[0, 0].add(S01).at[-1, 2].add(S01)
+
+    # normalize smoothing parameter so it is insensitive to the scale and
+    # number of data sites
+    span = jnp.ptp(x)
+    eff_x = 1 + (span**2) / jnp.sum(h**2)
+    eff_w = jnp.sum(w) ** 2 / jnp.sum(w**2)
+    k = 80 * (span**3) * (n**-2) * (eff_x**-0.5) * (eff_w**-0.5)
+    sp = p
+    pk = sp / (sp + (1 - sp) * k)
+
+    # Minimizing pk (f-y)^T W (f-y) + (1-pk) m^T M m subject to A m = Q^T f + g
+    # gives f = y - (1-pk) W^-1 Q u and m = pk M^-1 A^T u, where
+    #   K u = (pk P + (1-pk) R) u = Q^T y + g,  P = A M^-1 A^T,  R = Q^T W^-1 Q.
+    # P is positive definite but R is singular, so as pk -> 0, u diverges along the
+    # null space of Q while f and m have finite limits.
+    Qtw = Qt * jnp.stack([jnp.roll(1 / wN, -kk) for kk in range(-2, 3)], axis=1)
+    P = _band_pad(AMA, 4)
+    R = _band_matmul(Qtw, _band_transpose(Qt))
+    K = pk * P + (1 - pk) * R
+    hr = h[:, None]
+    Dy = jnp.zeros_like(yN).at[iv].set((yN[jv] - yN[iv]) / hr)
+    r = _band_matvec(Bt, Dy) + g
+
+    def apply_Q(v):
+        # Q v, taking differences before dividing by h
+        t = _band_matvec(_band_transpose(Bt), v)[iv] / hr
+        return jnp.zeros_like(v).at[jv].add(t).at[iv].add(-t)
+
+    Z, J = _smoothing_null_space(Bt, bc, n, periodic)
+
+    def solve_free(B, rhs):
+        # solve with the rows and columns J removed, returning zeros in J
+        return _solve_cyclic_banded_spd(_band_pin(B, J), rhs.at[J].set(0))
+
+    # With u = Z c + v, v_J = 0 and R Z = 0, the system becomes K v + P Z ct = r for
+    # ct = pk c, which stays finite as pk -> 0. Eliminating v leaves T ct = rho.
+    PZ = _band_matvec(P, Z)
+    KJ = _band_columns(K, J)
+    sol = solve_free(K, jnp.concatenate([r, PZ.astype(r.dtype)], axis=1))
+    vr, vp = sol[:, : r.shape[1]], sol[:, r.shape[1] :]
+    T = PZ[J] - KJ.T @ vp
+    rho = r[J] - KJ.T @ vr
+    ct = jnp.linalg.solve(T.astype(jnp.result_type(T, rho)), rho)
+    v = vr - vp @ ct
+    f = yN - (1 - pk) * apply_Q(v) / wN[:, None]
+    Atu = _band_matvec(_band_transpose(A), Z @ ct + pk * v)
+    if periodic:
+        m = _solve_cyclic_tridiagonal(M[:, 0], M[:, 1], M[:, 2], Atu)
+    else:
+        m = _solve_tridiagonal(M[1:, 0], M[:, 1], M[:-1, 2], Atu)
+
+    f, m = f[knot], m[knot]
+    D = (f[1:] - f[:-1]) / hr
+    s = jnp.concatenate(
+        [
+            D - hr * (2 * m[:-1] + m[1:]) / 6,
+            D[-1:] + hr[-1:] * (m[-2:-1] + 2 * m[-1:]) / 6,
+        ]
+    )
+    return f.reshape(y.shape), s.reshape(y.shape)
+
+
+@eqx.filter_jit
+def _cubic_smoothing_spline(x, y, w, p, axis, bc_type, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    y = jnp.moveaxis(y, axis, 0)
+    bc, dtype = _validate_bc(bc_type, y.shape[1:], y.dtype)
+    f, s = _smoothing_spline(x, y.astype(dtype), w, p, bc)
+    f, s = jnp.moveaxis(f, 0, axis), jnp.moveaxis(s, 0, axis)
+    return _cubic_hermite(x, f, s, axis, check)
+
+
+class CubicSmoothingSpline(CubicSpline):
+    """Smoothing spline for noisy data.
+
+    The spline f minimizes::
+
+        p̂ ∑ᵢ wᵢ ||yᵢ − f(xᵢ)||²  + (1−p̂) ∫ₓ ||f''(x)||²
+
+    where p̂ is the smoothing parameter ``p`` rescaled according to the spacing of
+    ``x`` and the weights ``w``, so that a given ``p`` produces a similar amount of
+    smoothing regardless of the scale and number of data sites. The normalization
+    of ``p`` follows the csaps package [1]_, and the spline is computed with a
+    generalization of the method of Reinsch [2]_, [3]_ to other boundary conditions.
+
+    Parameters
+    ----------
+    x : array_like, shape (n,)
+        1-D array containing values of the independent variable.
+        Values must be real, finite and in strictly increasing order.
+    y : array_like, shape(n,...)
+        Array containing values of the dependent variable. It can have
+        arbitrary number of dimensions, but the length along ``axis``
+        (see below) must match the length of ``x``. Values must be finite.
+    p : float, optional
+        Normalized smoothing parameter in the range [0,1]. Default is 0.5.
+
+        - For ``p=0`` the spline is the limit of small ``p``: the spline with the least
+          integrated squared second derivative that satisfies the boundary
+          conditions, with any remaining freedom fit to the data by weighted least
+          squares. For natural or not-a-knot boundary conditions this is the weighted
+          least squares straight line.
+        - For ``p=1``, it is the cubic spline interpolant.
+    w : array_like, shape(n,)
+        Weights for spline fitting. Must be positive. If None, then weights are all
+        equal. Default is None.
+    axis : int, optional
+        Axis along which `y` is assumed to be varying. Meaning that for
+        ``x[i]`` the corresponding values are ``np.take(y, i, axis=axis)``.
+        Default is 0.
+    bc_type : string or 2-tuple, optional
+        Boundary condition type. Two additional equations, given by the
+        boundary conditions, are required to determine all coefficients of
+        polynomials on each segment.
+
+        If `bc_type` is a string, then the specified condition will be applied
+        at both ends of a spline. Available conditions are:
+
+        * 'not-a-knot': The first and second segment at a curve end
+          are the same polynomial.
+        * 'periodic': The spline is periodic with period ``x[-1] - x[0]``, so
+          its value and first two derivatives match at both ends. ``y[0]`` and
+          ``y[-1]`` are both fit by the value at ``x[0]`` and need not be equal.
+        * 'clamped': The first derivative at curves ends are zero. Assuming
+          a 1D `y`, ``bc_type=((1, 0.0), (1, 0.0))`` is the same condition.
+        * 'natural' (default): The second derivative at curve ends are zero. Assuming
+          a 1D `y`, ``bc_type=((2, 0.0), (2, 0.0))`` is the same condition.
+
+        If `bc_type` is a 2-tuple, the first and the second value will be
+        applied at the curve start and end respectively. The tuple values can
+        be one of the previously mentioned strings (except 'periodic') or a
+        tuple `(order, deriv_values)` allowing to specify arbitrary
+        derivatives at curve ends:
+
+        * `order`: the derivative order, 1 or 2.
+        * `deriv_value`: array_like containing derivative values, shape must
+          be the same as `y`, excluding ``axis`` dimension. For example, if
+          `y` is 1-D, then `deriv_value` must be a scalar. If `y` is 3-D with
+          the shape (n0, n1, n2) and axis=2, then `deriv_value` must be 2-D
+          and have the shape (n0, n1).
+    extrapolate : {bool, 'periodic', None}, optional
+        If bool, determines whether to extrapolate to out-of-bounds points
+        based on first and last intervals, or to return NaNs. If 'periodic',
+        periodic extrapolation is used. If None (default), ``extrapolate`` is
+        set to 'periodic' for ``bc_type='periodic'`` and to True otherwise.
+    check : bool
+        Whether to perform checks on the input. Should be False if used under JIT.
+
+    References
+    ----------
+    .. [1] E. Prilepin, `csaps: Cubic spline approximation (smoothing)
+            <https://github.com/espdev/csaps>`_.
+    .. [2] C. H. Reinsch, "Smoothing by spline functions", Numerische Mathematik,
+            10, pp. 177-183, 1967.
+    .. [3] Carl de Boor, "A Practical Guide to Splines", Springer-Verlag, 1978.
+    """
+
+    def __init__(
+        self,
+        x: Real[ArrayLike, " n"],
+        y: Num[ArrayLike, " n ..."],
+        p: float | None = None,
+        w: Real[ArrayLike, " n"] | None = None,
+        axis: int = 0,
+        bc_type: str | Iterable = "natural",
+        extrapolate: bool | str | None = None,
+        check: bool = True,
+    ):
+        x, y = map(asarray_inexact, (x, y))
+        w = jnp.ones_like(x) if w is None else asarray_inexact(w)
+        if check:
+            if p is not None:
+                errorif(not 0 <= p <= 1, ValueError, f"p must be in [0, 1], got {p}.")
+            _check_values(x, y)
+        p_ = jnp.asarray(0.5 if p is None else p)
+        periodic = isinstance(bc_type, str) and bc_type == "periodic" and x.size > 2
+        if extrapolate is None:
+            extrapolate = "periodic" if periodic else True
+        c, x = _cubic_smoothing_spline(x, y, w, p_, axis, bc_type, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)

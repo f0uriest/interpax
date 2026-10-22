@@ -39,7 +39,6 @@ dependencies = [
   "jax >= 0.5.0, < 0.13",
   "jaxkd >= 0.1.2, < 0.2",
   "jaxtyping >= 0.2.24, < 0.4",
-  "lineax >= 0.0.5, < 0.2",
   "numpy >= 1.20.0, < 2.6",
 ]
 dynamic = ["version"]
