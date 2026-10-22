@@ -1,7 +1,6 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import lineax as lx
 
 from .utils import asarray_inexact, errorif
 
@@ -303,16 +302,17 @@ def _cubic2_system(x, f, bc):
 
 
 def _solve_tridiagonal(lower, diag, upper, b):
-    # see https://github.com/patrick-kidger/lineax/issues/148
+    # lower and upper are the n-1 entries below and above the diagonal, and b varies
+    # along axis 0
     dtype = jnp.result_type(diag, lower, upper, b)
-    A = lx.TridiagonalLinearOperator(
-        diag.astype(dtype), lower.astype(dtype), upper.astype(dtype)
+    zero = jnp.zeros(1, dtype)
+    x = jax.lax.linalg.tridiagonal_solve(
+        jnp.concatenate([zero, lower.astype(dtype)]),
+        diag.astype(dtype),
+        jnp.concatenate([upper.astype(dtype), zero]),
+        b.reshape(b.shape[0], -1).astype(dtype),
     )
-    # throw=False skips lineax's error check, whose host callback can cause a
-    # cache miss on every call under jit. The system is nonsingular by
-    # construction, so there is no failure to report.
-    solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal(), throw=False).value
-    return jnp.vectorize(solve, signature="(n)->(n)")(b.astype(dtype).T).T
+    return x.reshape(b.shape)
 
 
 def _solve_cyclic_tridiagonal(lower, diag, upper, b):

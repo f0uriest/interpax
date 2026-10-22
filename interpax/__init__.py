@@ -28,6 +28,7 @@ __all__ = [
     "fft_interp2d",
     "Akima1DInterpolator",
     "CubicHermiteSpline",
+    "CubicSmoothingSpline",
     "CubicSpline",
     "PchipInterpolator",
     "PPoly",

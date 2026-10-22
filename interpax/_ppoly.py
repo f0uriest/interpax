@@ -260,6 +260,7 @@ class PPoly(eqx.Module):
             y = y.transpose(l)
         return y
 
+    @wrap_jit(static_argnames=("nu",))
     def derivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the derivative.
 
@@ -299,6 +300,7 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, self.extrapolate, self.axis)
 
+    @wrap_jit(static_argnames=("nu",))
     def antiderivative(self, nu: int = 1) -> "PPoly":
         """Construct a new piecewise polynomial representing the antiderivative.
 
@@ -346,6 +348,7 @@ class PPoly(eqx.Module):
 
         return self.construct_fast(c2, self.x, extrapolate, self.axis)
 
+    @wrap_jit(static_argnames=("extrapolate",))
     def integrate(
         self, a: Real, b: Real, extrapolate: bool | str | None = None
     ) -> Inexact[Array, ""]:
@@ -695,7 +698,7 @@ def _real_roots(
 def prepare_input(x, y, axis, dydx=None, check=True):
     """Prepare input for cubic spline interpolators.
 
-    All data are converted to numpy arrays and checked for correctness.
+    All data are converted to jax arrays and their shapes and dtypes are checked.
     Axes equal to `axis` of arrays `y` and `dydx` are moved to be the 0th
     axis. The value of `axis` is converted to lie in
     [0, number of dimensions of `y`).
@@ -728,26 +731,70 @@ def prepare_input(x, y, axis, dydx=None, check=True):
             ValueError,
             f"The length of `y` along `axis`={axis} doesn't match the length of `x`",
         )
-        errorif(
-            not jnp.all(jnp.isfinite(x)),
-            ValueError,
-            "`x` must contain only finite values.",
-        )
-        errorif(
-            not jnp.all(jnp.isfinite(y)),
-            ValueError,
-            "`y` must contain only finite values.",
-        )
-        errorif(
-            (dydx is not None) and (not jnp.all(jnp.isfinite(dydx))),
-            ValueError,
-            "`dydx` must contain only finite values.",
-        )
-        errorif(
-            jnp.any(dx <= 0), ValueError, "`x` must be strictly increasing sequence."
-        )
 
     return x, dx, y, axis, dydx
+
+
+@jax.jit
+def _value_flags(x, y, dydx):
+    def finite(a):
+        return jnp.asarray(True) if a is None else jnp.all(jnp.isfinite(a))
+
+    return finite(x), finite(y), finite(dydx), jnp.all(jnp.diff(x) > 0)
+
+
+def _check_values(x, y, dydx=None):
+    # Checks that depend on the data values rather than their shapes, which need
+    # concrete arrays and so are done outside of the jitted constructors. The
+    # reductions are computed together in a single compiled call.
+    x_finite, y_finite, dydx_finite, increasing = _value_flags(x, y, dydx)
+    errorif(not x_finite, ValueError, "`x` must contain only finite values.")
+    errorif(not y_finite, ValueError, "`y` must contain only finite values.")
+    errorif(not dydx_finite, ValueError, "`dydx` must contain only finite values.")
+    errorif(not increasing, ValueError, "`x` must be strictly increasing sequence.")
+
+
+@eqx.filter_jit
+def _cubic_hermite(x, y, dydx, axis, check):
+    x, dx, y, axis, dydx = prepare_input(x, y, axis, dydx, check)
+    assert dydx is not None
+    y = jnp.moveaxis(y, axis, 0)
+    dydx = jnp.moveaxis(dydx, axis, 0)
+    dxr = dx.reshape([dx.shape[0]] + [1] * (y.ndim - 1))
+    F = jnp.stack([y[:-1], y[1:], dydx[:-1] * dxr, dydx[1:] * dxr], axis=0).T
+    c = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F)[..., ::-1]
+    # handle non-uniform spacing
+    c = c / (dx[:, None] ** jnp.arange(4)[::-1])
+    # c has shape (..., m, k) for m knots and order k
+    c = c.T  # (k, m, ...)
+    # c.shape = (k, m, ...), but we want it to be (..., k, m, ...)
+    #                                                   ^
+    #                                                  axis
+    # So we roll two of them.
+    c = jnp.moveaxis(c, 0, axis + 1)  # (m, ..., k)
+    c = jnp.moveaxis(c, 0, axis + 1)  # (..., k, m, ...)
+    return c, x
+
+
+@eqx.filter_jit
+def _pchip(x, y, axis, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    dydx = approx_df(x, y, "monotonic", axis=axis)
+    return _cubic_hermite(x, y, dydx, axis, check)
+
+
+@eqx.filter_jit
+def _akima(x, y, axis, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    dydx = approx_df(x, y, method="akima", axis=axis)
+    return _cubic_hermite(x, y, dydx, axis, check)
+
+
+@eqx.filter_jit
+def _cubic_spline(x, y, axis, bc_type, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    dydx = approx_df(x, y, "cubic2", axis, bc_type=bc_type)
+    return _cubic_hermite(x, y, dydx, axis, check)
 
 
 class CubicHermiteSpline(PPoly):
@@ -797,27 +844,11 @@ class CubicHermiteSpline(PPoly):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ) -> None:
-        if extrapolate is None:
-            extrapolate = True
-
-        x, dx, y, axis, dydx = prepare_input(x, y, axis, dydx, check)
-
-        y = jnp.moveaxis(y, axis, 0)
-        dydx = jnp.moveaxis(dydx, axis, 0)
-        dxr = dx.reshape([dx.shape[0]] + [1] * (y.ndim - 1))
-        F = jnp.stack([y[:-1], y[1:], dydx[:-1] * dxr, dydx[1:] * dxr], axis=0).T
-        c = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F)[..., ::-1]
-        # handle non-uniform spacing
-        c = c / (dx[:, None] ** jnp.arange(4)[::-1])
-        # c has shape (..., m, k) for m knots and order k
-        c = c.T  # (k, m, ...)
-        # c.shape = (k, m, ...), but we want it to be (..., k, m, ...)
-        #                                                   ^
-        #                                                  axis
-        # So we roll two of them.
-        c = jnp.moveaxis(c, 0, axis + 1)  # (m, ..., k)
-        c = jnp.moveaxis(c, 0, axis + 1)  # (..., k, m, ...)
-        super().__init__(c, x, extrapolate=extrapolate, axis=axis, check=check)
+        x, y, dydx = map(asarray_inexact, (x, y, dydx))
+        if check:
+            _check_values(x, y, dydx)
+        c, x = _cubic_hermite(x, y, dydx, axis, check)
+        super().__init__(c, x, extrapolate=extrapolate, axis=axis, check=False)
 
 
 class PchipInterpolator(CubicHermiteSpline):
@@ -898,9 +929,11 @@ class PchipInterpolator(CubicHermiteSpline):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ):
-        x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
-        dydx = approx_df(x, y, "monotonic", axis=axis)
-        super().__init__(x, y, dydx, axis=axis, extrapolate=extrapolate, check=check)
+        x, y = map(asarray_inexact, (x, y))
+        if check:
+            _check_values(x, y)
+        c, x = _pchip(x, y, axis, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)
 
 
 class Akima1DInterpolator(CubicHermiteSpline):
@@ -956,9 +989,11 @@ class Akima1DInterpolator(CubicHermiteSpline):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ):
-        x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
-        t = approx_df(x, y, method="akima", axis=axis)
-        super().__init__(x, y, t, axis=axis, extrapolate=extrapolate, check=check)
+        x, y = map(asarray_inexact, (x, y))
+        if check:
+            _check_values(x, y)
+        c, x = _akima(x, y, axis, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)
 
 
 class CubicSpline(CubicHermiteSpline):
@@ -1055,21 +1090,26 @@ class CubicSpline(CubicHermiteSpline):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ):
-        x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+        x, y = map(asarray_inexact, (x, y))
         periodic = isinstance(bc_type, str) and bc_type == "periodic"
+        if check:
+            _check_values(x, y)
+            if periodic:
+                errorif(
+                    not jnp.allclose(
+                        jnp.take(y, 0, axis),
+                        jnp.take(y, -1, axis),
+                        rtol=1e-15,
+                        atol=1e-15,
+                    ),
+                    ValueError,
+                    f"The first and last `y` point along axis {axis} must be identical "
+                    "(within machine precision) when bc_type='periodic'.",
+                )
         if extrapolate is None:
             extrapolate = "periodic" if periodic else True
-        if check and periodic:
-            errorif(
-                not jnp.allclose(
-                    jnp.take(y, 0, axis), jnp.take(y, -1, axis), rtol=1e-15, atol=1e-15
-                ),
-                ValueError,
-                f"The first and last `y` point along axis {axis} must be identical "
-                "(within machine precision) when bc_type='periodic'.",
-            )
-        df = approx_df(x, y, "cubic2", axis, bc_type=bc_type)
-        super().__init__(x, y, df, axis=axis, extrapolate=extrapolate, check=check)
+        c, x = _cubic_spline(x, y, axis, bc_type, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)
 
 
 # Banded matrices are stored cyclically: band[i, k + q] = A[i, (i + k) % n] for
@@ -1202,8 +1242,10 @@ def _solve_cyclic_banded_spd(A, b):
     a, c = np.nonzero(np.ones((q, q)))
     At = At.at[n - q + a, c - a + q].add(coupled * (C.T @ C)[a, c] / g)
     Y = jnp.zeros((n, q), A.dtype).at[:q].set(jnp.eye(q)).at[n - q :].set(-C.T / g)
-    Z = _solve_banded_symmetric(At, Y)
-    z = _solve_banded_symmetric(At, b)
+    dtype = jnp.result_type(Y, b)
+    rhs = jnp.concatenate([Y.astype(dtype), b.reshape(n, -1).astype(dtype)], axis=1)
+    sol = _solve_banded_symmetric(At, rhs)
+    Z, z = sol[:, :q], sol[:, q:].reshape(b.shape)
     cap = jnp.where(coupled, jnp.eye(q) / g - Y.T @ Z, jnp.eye(q))
     corr = Z @ jnp.linalg.solve(cap, (Y.T @ z.reshape(n, -1)).astype(z.dtype))
     return z + coupled * corr.reshape(z.shape)
@@ -1304,19 +1346,24 @@ def _smoothing_spline(x, y, w, p, bc):
         #   s[i] = D - h (2 m[i] + m[i+1]) / 6
         #   s[i+1] = D + h (m[i] + 2 m[i+1]) / 6
         # on the end intervals, where D = (f[i+1] - f[i]) / h.
-        lower, diag, upper, _, _ = _cubic2_system(x, y, bc)
-        ends = np.unique(np.r_[np.arange(min(3, n)), np.arange(max(n - 3, 0), n)])
-
-        def b_ends(v):
-            f = jnp.zeros(y.shape, dtype).at[ends].set(v.reshape(shp).astype(dtype))
-            b = _cubic2_system(x, f, bc)[3]
-            return b[np.array([0, -1])].reshape(2, -1)[:, 0]
-
         # each end row of the slope system depends on at most 3 knot values, so
-        # its dependence on f is found exactly by probing only the end knots
-        G = jax.jacfwd(b_ends)(jnp.zeros(len(ends), rdtype)).real
-        b0 = _cubic2_system(x, jnp.zeros_like(y), bc)[3]
-        b0 = b0[np.array([0, -1])].reshape(2, -1)
+        # its dependence on f is found exactly by probing only the end knots. The
+        # system is traced once, giving the matrix, the offset at f = 0 and the
+        # probed columns together.
+        ends = np.unique(np.r_[np.arange(min(3, n)), np.arange(max(n - 3, 0), n)])
+        probes = jnp.zeros((len(ends),) + y.shape, dtype)
+        probes = probes.at[np.arange(len(ends)), ends].set(1)
+
+        def system(f):
+            return _cubic2_system(x, f, bc)[:4]
+
+        def probe(t):
+            return jax.jvp(system, (jnp.zeros_like(y),), (t,))
+
+        (lower, diag, upper, b0), (_, _, _, db) = jax.vmap(probe)(probes)
+        lower, diag, upper = lower[0], diag[0], upper[0]
+        b0 = b0[0][np.array([0, -1])].reshape(2, -1)
+        G = db[:, np.array([0, -1])].reshape(len(ends), 2, -1)[:, :, 0].T.real
         for e, (row, lo, c0, c1, he) in enumerate(
             [
                 (0, 0, diag[0], upper[0], h[0]),
@@ -1401,8 +1448,8 @@ def _smoothing_spline(x, y, w, p, bc):
     # ct = pk c, which stays finite as pk -> 0. Eliminating v leaves T ct = rho.
     PZ = _band_matvec(P, Z)
     KJ = _band_columns(K, J)
-    vr = solve_free(K, r)
-    vp = solve_free(K, PZ)
+    sol = solve_free(K, jnp.concatenate([r, PZ.astype(r.dtype)], axis=1))
+    vr, vp = sol[:, : r.shape[1]], sol[:, r.shape[1] :]
     T = PZ[J] - KJ.T @ vp
     rho = r[J] - KJ.T @ vr
     ct = jnp.linalg.solve(T.astype(jnp.result_type(T, rho)), rho)
@@ -1423,6 +1470,16 @@ def _smoothing_spline(x, y, w, p, bc):
         ]
     )
     return f.reshape(y.shape), s.reshape(y.shape)
+
+
+@eqx.filter_jit
+def _cubic_smoothing_spline(x, y, w, p, axis, bc_type, check):
+    x, _, y, axis, _ = prepare_input(x, y, axis, check=check)
+    y = jnp.moveaxis(y, axis, 0)
+    bc, dtype = _validate_bc(bc_type, y.shape[1:], y.dtype)
+    f, s = _smoothing_spline(x, y.astype(dtype), w, p, bc)
+    f, s = jnp.moveaxis(f, 0, axis), jnp.moveaxis(s, 0, axis)
+    return _cubic_hermite(x, f, s, axis, check)
 
 
 class CubicSmoothingSpline(CubicSpline):
@@ -1521,23 +1578,15 @@ class CubicSmoothingSpline(CubicSpline):
         extrapolate: bool | str | None = None,
         check: bool = True,
     ):
-        if check and p is not None:
-            errorif(not 0 <= p <= 1, ValueError, f"p must be in [0, 1], got {p}.")
-        x = asarray_inexact(x)
-        y = jnp.moveaxis(asarray_inexact(y), axis, 0)
+        x, y = map(asarray_inexact, (x, y))
         w = jnp.ones_like(x) if w is None else asarray_inexact(w)
-        bc, dtype = _validate_bc(bc_type, y.shape[1:], y.dtype)
-        y = y.astype(dtype)
-        periodic = isinstance(bc[0], str) and bc[0] == "periodic" and x.size > 2
-        f, s = _smoothing_spline(x, y, w, jnp.asarray(0.5 if p is None else p), bc)
+        if check:
+            if p is not None:
+                errorif(not 0 <= p <= 1, ValueError, f"p must be in [0, 1], got {p}.")
+            _check_values(x, y)
+        p_ = jnp.asarray(0.5 if p is None else p)
+        periodic = isinstance(bc_type, str) and bc_type == "periodic" and x.size > 2
         if extrapolate is None:
             extrapolate = "periodic" if periodic else True
-        CubicHermiteSpline.__init__(
-            self,
-            x,
-            jnp.moveaxis(f, 0, axis),
-            jnp.moveaxis(s, 0, axis),
-            axis=axis,
-            extrapolate=extrapolate,
-            check=check,
-        )
+        c, x = _cubic_smoothing_spline(x, y, w, p_, axis, bc_type, check)
+        PPoly.__init__(self, c, x, extrapolate=extrapolate, axis=axis, check=False)
