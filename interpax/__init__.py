@@ -11,7 +11,9 @@ from ._ppoly import (
     PPoly,
     SmoothingSpline,
 )
+from ._rbf import RBFInterpolator
 from ._spline import (
+    AbstractInterpolator,
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
@@ -19,5 +21,24 @@ from ._spline import (
     interp2d,
     interp3d,
 )
+
+__all__ = [
+    "approx_df",
+    "fft_interp1d",
+    "fft_interp2d",
+    "Akima1DInterpolator",
+    "CubicHermiteSpline",
+    "CubicSpline",
+    "PchipInterpolator",
+    "PPoly",
+    "AbstractInterpolator",
+    "Interpolator1D",
+    "Interpolator2D",
+    "Interpolator3D",
+    "interp1d",
+    "interp2d",
+    "interp3d",
+    "RBFInterpolator",
+]
 
 __version__ = _version.get_versions()["version"]

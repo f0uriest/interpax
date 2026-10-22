@@ -1,6 +1,7 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jax import jit
+import lineax as lx
 
 from .utils import asarray_inexact, errorif
 
@@ -40,28 +41,32 @@ def approx_df(
         First derivative of f with respect to x.
 
     """
-    # noqa:D202
-
-    # close over static args to deal with non-jittable kwargs
-    def fun(x, f):
-        return _approx_df(x, f, method, axis, **kwargs)
-
-    return jit(fun)(x, f)
-
-
-def _approx_df(x, f, method, axis, c=0, bc_type="not-a-knot"):
     if method == "cubic":
         out = _cubic1(x, f, axis)
     elif method == "cubic2":
-        out = _cubic2(x, f, axis, bc_type=bc_type)
+        bc_type = kwargs.get("bc_type", "not-a-knot")
+        bc, dtype = _validate_bc(bc_type, f.shape[:axis] + f.shape[axis + 1 :], f.dtype)
+        out = _cubic2(x, f, axis, bc=bc, dtype=dtype)
     elif method == "cardinal":
-        out = _cardinal(x, f, axis, c=c)
+        out = _cardinal(x, f, axis, c=kwargs.get("c", 0))
     elif method == "catmull-rom":
         out = _cardinal(x, f, axis, c=0)
     elif method == "monotonic":
-        out = _monotonic(x, f, axis, False)
+        if jnp.iscomplexobj(f):
+            # make real and imag part monotonic separately.
+            out1 = _monotonic(x, f.real, axis, False)
+            out2 = _monotonic(x, f.imag, axis, False)
+            out = out1 + 1j * out2
+        else:
+            out = _monotonic(x, f, axis, False)
     elif method == "monotonic-0":
-        out = _monotonic(x, f, axis, True)
+        if jnp.iscomplexobj(f):
+            # make real and imag part monotonic separately.
+            out1 = _monotonic(x, f.real, axis, True)
+            out2 = _monotonic(x, f.imag, axis, True)
+            out = out1 + 1j * out2
+        else:
+            out = _monotonic(x, f, axis, True)
     elif method == "akima":
         out = _akima(x, f, axis)
     elif method in ("nearest", "linear"):
@@ -71,6 +76,7 @@ def _approx_df(x, f, method, axis, c=0, bc_type="not-a-knot"):
     return out
 
 
+@eqx.filter_jit
 def _cubic1(x, f, axis):
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=axis)
@@ -97,7 +103,6 @@ def _cubic1(x, f, axis):
 
 def _validate_bc(bc_type, expected_deriv_shape, dtype):
     if isinstance(bc_type, str):
-        errorif(bc_type == "periodic", NotImplementedError)
         bc_type = (bc_type, bc_type)
 
     else:
@@ -118,7 +123,6 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
     validated_bc = []
     for bc in bc_type:
         if isinstance(bc, str):
-            errorif(bc_type == "periodic", NotImplementedError)
             if bc == "clamped":
                 validated_bc.append((1, jnp.zeros(expected_deriv_shape)))
             elif bc == "natural":
@@ -137,23 +141,23 @@ def _validate_bc(bc_type, expected_deriv_shape, dtype):
                 ) from e
 
             if deriv_order not in [1, 2]:
-                raise ValueError("The specified derivative order must " "be 1 or 2.")
+                raise ValueError("The specified derivative order must be 1 or 2.")
 
             deriv_value = asarray_inexact(deriv_value)
             dtype = jnp.promote_types(dtype, deriv_value.dtype)
             if deriv_value.shape != expected_deriv_shape:
                 raise ValueError(
-                    "`deriv_value` shape {} is not the expected one {}.".format(
-                        deriv_value.shape, expected_deriv_shape
-                    )
+                    f"`deriv_value` shape {deriv_value.shape} is not the expected one "
+                    f"{expected_deriv_shape}."
                 )
             validated_bc.append((deriv_order, deriv_value))
     return validated_bc, dtype
 
 
-def _cubic2(x, f, axis, bc_type):
+@eqx.filter_jit
+def _cubic2(x, f, axis, bc, dtype):
+    f = f.astype(dtype)
     f = jnp.moveaxis(f, axis, 0)
-    bc, dtype = _validate_bc(bc_type, f.shape[1:], f.dtype)
     dx = jnp.diff(x)
     df = jnp.diff(f, axis=0)
     dxr = dx.reshape([dx.shape[0]] + [1] * (f.ndim - 1))
@@ -195,8 +199,11 @@ def _cubic2(x, f, axis, bc_type):
         fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
         fx = jnp.moveaxis(fx, 0, axis)
 
-    else:
+    elif bc[0] == "periodic":
+        fx = _cubic2_periodic(dx, df)
+        fx = jnp.moveaxis(fx, 0, axis)
 
+    else:
         # Find derivative values at each x[i] by solving a tridiagonal
         # system.
         diag = jnp.zeros(n, dtype=x.dtype)
@@ -217,14 +224,29 @@ def _cubic2(x, f, axis, bc_type):
             b = b.at[0].set(
                 ((dxr[0] + 2 * d) * dxr[1] * df[0] + dxr[0] ** 2 * df[1]) / d
             )
-        elif bc_start[0] == 1:
-            diag = diag.at[0].set(1)
-            upper_diag = upper_diag.at[0].set(0)
-            b = b.at[0].set(bc_start[1])
-        elif bc_start[0] == 2:
-            diag = diag.at[0].set(2 * dx[0])
-            upper_diag = upper_diag.at[0].set(dx[0])
-            b = b.at[0].set(-0.5 * bc_start[1] * dx[0] ** 2 + 3 * (f[1] - f[0]))
+        else:
+
+            def bc_start0(diag, upper_diag, b):
+                return diag, upper_diag, b
+
+            def bc_start1(diag, upper_diag, b):
+                diag = diag.at[0].set(1)
+                upper_diag = upper_diag.at[0].set(0)
+                b = b.at[0].set(bc_start[1])
+                return diag, upper_diag, b
+
+            def bc_start2(diag, upper_diag, b):
+                diag = diag.at[0].set(2 * dx[0])
+                upper_diag = upper_diag.at[0].set(dx[0])
+                b = b.at[0].set(-0.5 * bc_start[1] * dx[0] ** 2 + 3 * (f[1] - f[0]))
+                return diag, upper_diag, b
+
+            diag, upper_diag, b = jax.lax.cond(
+                bc_start[0] == 1, bc_start1, bc_start0, diag, upper_diag, b
+            )
+            diag, upper_diag, b = jax.lax.cond(
+                bc_start[0] == 2, bc_start2, bc_start0, diag, upper_diag, b
+            )
 
         if bc_end == "not-a-knot":
             d = x[-1] - x[-3]
@@ -233,24 +255,105 @@ def _cubic2(x, f, axis, bc_type):
             b = b.at[-1].set(
                 (dxr[-1] ** 2 * df[-2] + (2 * d + dxr[-1]) * dxr[-2] * df[-1]) / d
             )
-        elif bc_end[0] == 1:
-            diag = diag.at[-1].set(1)
-            lower_diag = lower_diag.at[-1].set(0)
-            b = b.at[-1].set(bc_end[1])
-        elif bc_end[0] == 2:
-            diag = diag.at[-1].set(2 * dx[-1])
-            lower_diag = lower_diag.at[-1].set(dx[-1])
-            b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
+        else:
 
-        A = jnp.diag(diag) + jnp.diag(upper_diag, k=1) + jnp.diag(lower_diag, k=-1)
+            def bc_end0(diag, lower_diag, b):
+                return diag, lower_diag, b
 
-        solve = lambda b: jnp.linalg.solve(A, b)
+            def bc_end1(diag, lower_diag, b):
+                diag = diag.at[-1].set(1)
+                lower_diag = lower_diag.at[-1].set(0)
+                b = b.at[-1].set(bc_end[1])
+                return diag, lower_diag, b
+
+            def bc_end2(diag, lower_diag, b):
+                diag = diag.at[-1].set(2 * dx[-1])
+                lower_diag = lower_diag.at[-1].set(dx[-1])
+                b = b.at[-1].set(0.5 * bc_end[1] * dx[-1] ** 2 + 3 * (f[-1] - f[-2]))
+                return diag, lower_diag, b
+
+            diag, lower_diag, b = jax.lax.cond(
+                bc_end[0] == 1, bc_end1, bc_end0, diag, lower_diag, b
+            )
+            diag, lower_diag, b = jax.lax.cond(
+                bc_end[0] == 2, bc_end2, bc_end0, diag, lower_diag, b
+            )
+
+        # this is needed to avoid singular matrix when there are duplicate x coords
+        mask = diag == 0
+        diag = jnp.where(mask, 1, diag)
+        lower_diag = jnp.where(mask[1:], 0, lower_diag)
+        upper_diag = jnp.where(mask[:-1], 0, upper_diag)
+        b = jnp.where(mask, 0, b.T).T
+
+        # see https://github.com/patrick-kidger/lineax/issues/148
+        dtype = jnp.result_type(diag, lower_diag, upper_diag, b)
+        diag = diag.astype(dtype)
+        lower_diag = lower_diag.astype(dtype)
+        upper_diag = upper_diag.astype(dtype)
+        b = b.astype(dtype)
+
+        A = lx.TridiagonalLinearOperator(diag, lower_diag, upper_diag)
+
+        # throw=False skips lineax's error check, whose host callback can cause a
+        # cache miss on every call under jit. The system is nonsingular by
+        # construction, so there is no failure to report.
+        solve = lambda b: lx.linear_solve(A, b, lx.Tridiagonal(), throw=False).value
         fx = jnp.vectorize(solve, signature="(n)->(n)")(b.T).T
         fx = jnp.moveaxis(fx, 0, axis)
-    return fx
+    return fx.astype(f.dtype)
 
 
-def _cardinal(x, f, axis, c=0):
+def _cubic2_periodic(dx, df):
+    # Since f[-1] == f[0], the last knot duplicates the first and there are only
+    # m = n-1 unknown slopes s[0..m-1]. The C2 condition at knot i, with indices
+    # taken mod m, is
+    #   dx[i] * s[i-1] + 2 * (dx[i-1] + dx[i]) * s[i] + dx[i-1] * s[i+1]  # noqa:ERA001
+    #     = 3 * (dx[i] * df[i-1] + dx[i-1] * df[i])                       # noqa:ERA001
+    # which is a cyclic tridiagonal system.
+    m = dx.shape[0]
+    dxr = dx.reshape([m] + [1] * (df.ndim - 1))
+    dx_prev = jnp.roll(dx, 1)
+    dxr_prev = jnp.roll(dxr, 1, axis=0)
+    b = 3 * (dxr * jnp.roll(df, 1, axis=0) + dxr_prev * df)
+
+    if m == 2:
+        # Both rows couple s[0] and s[1] through the same entries, so the system
+        # isn't tridiagonal with distinct corners. Its solution is s[0] == s[1].
+        s = b[:1] / (3 * (dxr[0] + dxr[1]))
+        return jnp.concatenate([s, s, s], axis=0)
+
+    diag = 2 * (dx_prev + dx)
+    lower_diag = dx[1:]  # coefficient of s[i-1] in row i
+    upper_diag = dx_prev[:-1]  # coefficient of s[i+1] in row i
+    corner_top = dx[0]  # coefficient of s[m-1] in row 0
+    corner_bot = dx_prev[-1]  # coefficient of s[0] in row m-1
+
+    # Sherman-Morrison: A = T + u v^T, where T is tridiagonal and u v^T holds the
+    # corner entries. The system is strictly diagonally dominant, so gamma = -diag[0]
+    # keeps T well conditioned.
+    gamma = -diag[0]
+    diag = diag.at[0].add(-gamma)
+    diag = diag.at[-1].add(-corner_bot * corner_top / gamma)
+    u = jnp.zeros(m, dtype=diag.dtype).at[0].set(gamma).at[-1].set(corner_bot)
+    v = jnp.zeros(m, dtype=diag.dtype).at[0].set(1).at[-1].set(corner_top / gamma)
+
+    # see https://github.com/patrick-kidger/lineax/issues/148
+    dtype = jnp.result_type(diag, b)
+    T = lx.TridiagonalLinearOperator(
+        diag.astype(dtype), lower_diag.astype(dtype), upper_diag.astype(dtype)
+    )
+    # throw=False skips lineax's error check, see _cubic2
+    solve = lambda rhs: lx.linear_solve(T, rhs, lx.Tridiagonal(), throw=False).value
+    z = solve(u.astype(dtype))
+    y = jnp.vectorize(solve, signature="(n)->(n)")(b.astype(dtype).T).T
+    coef = jnp.tensordot(v, y, axes=1) / (1 + v @ z)
+    s = y - z.reshape([m] + [1] * (y.ndim - 1)) * coef
+    return jnp.concatenate([s, s[:1]], axis=0)
+
+
+@eqx.filter_jit
+def _cardinal(x: jax.Array, f: jax.Array, axis: int, c: float = 0.0):
     dx = x[2:] - x[:-2]
     df = jnp.take(f, jnp.arange(2, f.shape[axis]), axis, mode="wrap") - jnp.take(
         f, jnp.arange(0, f.shape[axis] - 2), axis, mode="wrap"
@@ -273,7 +376,8 @@ def _cardinal(x, f, axis, c=0):
     return fx
 
 
-def _monotonic(x, f, axis, zero_slope):
+@eqx.filter_jit
+def _monotonic(x: jax.Array, f: jax.Array, axis: int, zero_slope: bool):
     f = jnp.moveaxis(f, axis, 0)
     fshp = f.shape
     if f.ndim == 1:
@@ -298,18 +402,19 @@ def _monotonic(x, f, axis, zero_slope):
         w1 = jnp.expand_dims(w1, tuple(range(1, df.ndim)))
         w2 = jnp.expand_dims(w2, tuple(range(1, df.ndim)))
 
-    whmean = (w1 / mk[:-1, :] + w2 / mk[1:, :]) / (w1 + w2)
+    whmean = safediv(safediv(w1, mk[:-1, :]) + safediv(w2, mk[1:, :]), w1 + w2)
 
-    dk = jnp.where(condition, 0, 1.0 / whmean)
+    dk = jnp.where(condition, 0, safediv(jnp.array(1.0), whmean))
 
-    if zero_slope:
-        d0 = jnp.zeros((1, dk.shape[1]))
-        d1 = jnp.zeros((1, dk.shape[1]))
+    def slope_zero():
+        d0 = jnp.zeros((1, *dk.shape[1:]), dtype=f.dtype)
+        d1 = jnp.zeros((1, *dk.shape[1:]), dtype=f.dtype)
+        return d0, d1
 
-    else:
+    def slope_nonzero():
         # special case endpoints, as suggested in
         # Cleve Moler, Numerical Computing with MATLAB, Chap 3.6 (pchiptx.m)
-        def _edge_case(h0, h1, m0, m1):
+        def _edge_case(h0: jax.Array, h1: jax.Array, m0: jax.Array, m1: jax.Array):
             # one-sided three-point estimate for the derivative
             d = ((2 * h0 + h1) * m0 - h0 * m1) / (h0 + h1)
 
@@ -325,19 +430,23 @@ def _monotonic(x, f, axis, zero_slope):
         hk = 1 / hki
         d0 = _edge_case(hk[0, :], hk[1, :], mk[0, :], mk[1, :])[None]
         d1 = _edge_case(hk[-1, :], hk[-2, :], mk[-1, :], mk[-2, :])[None]
+        return d0, d1
+
+    d0, d1 = jax.lax.cond(zero_slope, slope_zero, slope_nonzero)
 
     dk = jnp.concatenate([d0, dk, d1])
     dk = dk.reshape(fshp)
     return jnp.moveaxis(dk, 0, axis)
 
 
+@eqx.filter_jit
 def _akima(x, f, axis):
     # Original implementation in MATLAB by N. Shamsundar (BSD licensed), see
     # https://www.mathworks.com/matlabcentral/fileexchange/1814-akima-interpolation
     dx = jnp.diff(x)
     f = jnp.moveaxis(f, axis, 0)
     # determine slopes between breakpoints
-    m = jnp.empty((x.size + 3,) + f.shape[1:])
+    m = jnp.empty((x.size + 3,) + f.shape[1:], dtype=f.dtype)
     dx = dx[(slice(None),) + (None,) * (f.ndim - 1)]
     mask = dx == 0
     dx = jnp.where(mask, 1, dx)
@@ -365,3 +474,22 @@ def _akima(x, f, axis):
     df = (m4m3 * m2 + m2m1 * m3) / jnp.where(mask, f12, 1.0)
     df = jnp.where(mask, df, 0.5 * (m[3:] + m[:-3]))
     return jnp.moveaxis(df, 0, axis)
+
+
+def safediv(a: jax.Array, b: jax.Array, fill=0, threshold=0):
+    """Divide a/b with guards for division by zero.
+
+    Parameters
+    ----------
+    a, b : ndarray
+        Numerator and denominator.
+    fill : float, ndarray, optional
+        Value to return where b is zero.
+    threshold : float >= 0
+        How small is b allowed to be.
+
+    """
+    mask = jnp.abs(b) <= threshold
+    num = jnp.where(mask, fill, a)
+    den = jnp.where(mask, 1, b)
+    return num / den

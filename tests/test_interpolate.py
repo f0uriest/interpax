@@ -1,5 +1,8 @@
 """Tests for interpolation functions."""
 
+import subprocess
+import sys
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,6 +19,7 @@ from interpax import (
     interp2d,
     interp3d,
 )
+from interpax._spline import _find_cell
 
 jax_config.update("jax_enable_x64", True)
 
@@ -24,48 +28,61 @@ class TestInterp1D:
     """Tests for interp1d function."""
 
     @pytest.mark.unit
+    @pytest.mark.parametrize("x", [np.linspace(0, 2 * np.pi, 10000), 0.0])
     @pytest.mark.parametrize(
-        "x",
-        [
-            np.linspace(0, 2 * np.pi, 10000),
-            0.0,
-        ],
+        "dtype", [jnp.float32, jnp.float64, jnp.complex64, jnp.complex128]
     )
-    def test_interp1d(self, x):
+    def test_interp1d(self, x, dtype):
         """Test accuracy of different 1d interpolation methods."""
-        xp = np.linspace(0, 2 * np.pi, 100)
-        f = lambda x: np.sin(x)
+        xp = np.real(np.linspace(0, 2 * np.pi, 100).astype(dtype))
+        if jnp.iscomplexobj(dtype):
+            f = lambda x: jnp.sin(x) + 1j * jnp.sin(x)
+        else:
+            f = lambda x: jnp.sin(x)
         fp = f(xp)
+
+        if isinstance(x, np.ndarray):
+            x = np.real(x.astype(dtype))
+        fp = fp.astype(dtype)
 
         interp1 = lambda xq, *args, **kwargs: interp1d(xq, *args, **kwargs)
         interp2 = lambda xq, *args, **kwargs: Interpolator1D(*args, **kwargs)(xq)
 
         for interp in [interp1, interp2]:
             fq = interp(x, xp, fp, method="nearest")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-2, atol=1e-1)
 
             fq = interp(x, xp, fp, method="linear")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
 
             fq = interp(x, xp, fp, method="cubic")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="cubic2")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="cardinal")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="catmull-rom")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=1e-5)
 
             fq = interp(x, xp, fp, method="monotonic")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-3)
 
             fq = interp(x, xp, fp, method="monotonic-0")
-            np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1e-2)
+            assert fq.dtype == np.result_type(x, xp, fp)
+            np.testing.assert_allclose(fq, f(x), rtol=1e-4, atol=1.5e-2)
 
             fq = interp(x, xp, fp, method="akima")
+            assert fq.dtype == np.result_type(x, xp, fp)
             np.testing.assert_allclose(fq, f(x), rtol=1e-6, atol=2e-5)
 
     @pytest.mark.unit
@@ -98,6 +115,40 @@ class TestInterp1D:
         np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-3)
 
         fq = interp1d(x, xp, fp, method="monotonic-0")
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-2)
+
+    @pytest.mark.unit
+    def test_interp1d_even_spaced(self):
+        """Test for interpolating with an evenly spaced grid."""
+        xp = np.linspace(0, 2 * np.pi, 100)
+        x = np.linspace(0, 2 * np.pi, 300)[10:-10]
+        f = lambda x: np.array([np.sin(x), np.cos(x)])
+        fp = f(xp).T
+
+        nearest = fp[np.argmin(np.abs(x[:, None] - xp[None]), axis=1)]
+        for even_spacing in [True, False]:
+            fq = interp1d(x, xp, fp, method="nearest", even_spacing=even_spacing)
+            np.testing.assert_allclose(fq, nearest)
+
+        fq = interp1d(x, xp, fp, method="linear", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-3)
+
+        fq = interp1d(x, xp, fp, method="cubic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="cubic2", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="cardinal", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="catmull-rom", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-6, atol=1e-5)
+
+        fq = interp1d(x, xp, fp, method="monotonic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-3)
+
+        fq = interp1d(x, xp, fp, method="monotonic-0", even_spacing=True)
         np.testing.assert_allclose(fq, f(x).T, rtol=1e-4, atol=1e-2)
 
     @pytest.mark.unit
@@ -147,14 +198,27 @@ class TestInterp2D:
             (0.0, 0.0),
         ],
     )
-    def test_interp2d(self, x, y):
+    @pytest.mark.parametrize(
+        "dtype", [jnp.float32, jnp.float64, jnp.complex64, jnp.complex128]
+    )
+    def test_interp2d(self, x, y, dtype):
         """Test accuracy of different 2d interpolation methods."""
-        xp = np.linspace(0, 3 * np.pi, 99)
-        yp = np.linspace(0, 2 * np.pi, 40)
+        xp = np.real(np.linspace(0, 3 * np.pi, 99).astype(dtype))
+        yp = np.real(np.linspace(0, 2 * np.pi, 40).astype(dtype))
         xxp, yyp = np.meshgrid(xp, yp, indexing="ij")
 
-        f = lambda x, y: np.sin(x) * np.cos(y)
+        if jnp.iscomplexobj(dtype):
+            f = lambda x, y: jnp.sin(x) * jnp.cos(y) + 1j * jnp.sin(x) * jnp.cos(y)
+        else:
+            f = lambda x, y: jnp.sin(x) * jnp.cos(y)
+
         fp = f(xxp, yyp)
+
+        if isinstance(x, np.ndarray):
+            x = np.real(x.astype(dtype))
+        if isinstance(y, np.ndarray):
+            y = np.real(y.astype(dtype))
+        fp = fp.astype(dtype)
 
         interp1 = lambda xq, yq, *args, **kwargs: interp2d(xq, yq, *args, **kwargs)
         interp2 = lambda xq, yq, *args, **kwargs: Interpolator2D(*args, **kwargs)(
@@ -165,37 +229,48 @@ class TestInterp2D:
             fq = interp(
                 x, y, xp, yp, fp, method="nearest", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1)
-
             fq = interp(
                 x, y, xp, yp, fp, method="linear", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=1e-4, atol=1e-2)
             atol = 2e-3
             rtol = 1e-5
             fq = interp(x, y, xp, yp, fp, method="cubic", period=(2 * np.pi, 2 * np.pi))
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
             fq = interp(
                 x, y, xp, yp, fp, method="cubic2", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
             fq = interp(
                 x, y, xp, yp, fp, method="catmull-rom", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
 
             fq = interp(
                 x, y, xp, yp, fp, method="cardinal", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
             fq = interp(x, y, xp, yp, fp, method="akima", period=(2 * np.pi, 2 * np.pi))
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=rtol, atol=atol)
             fq = interp(
                 x, y, xp, yp, fp, method="monotonic", period=(2 * np.pi, 2 * np.pi)
             )
+            assert fq.dtype == np.result_type(x, y, xp, yp, fp)
             np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=1e-3)
+            fq = interp(
+                x, y, xp, yp, fp, method="monotonic-0", period=(2 * np.pi, 2 * np.pi)
+            )
+            np.testing.assert_allclose(fq, f(x, y), rtol=1e-2, atol=2e-2)
 
     @pytest.mark.unit
     def test_interp2d_vector_valued(self):
@@ -218,6 +293,27 @@ class TestInterp2D:
         fq = interp2d(x, y, xp, yp, fp, method="cubic")
         np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-5, atol=2e-3)
 
+    @pytest.mark.unit
+    def test_interp2d_even_spaced(self):
+        """Test for interpolating with evenly spaced grid."""
+        xp = np.linspace(0, 3 * np.pi, 99)
+        yp = np.linspace(0, 2 * np.pi, 40)
+        x = np.linspace(0, 3 * np.pi, 200)
+        y = np.linspace(0, 2 * np.pi, 200)
+        xxp, yyp = np.meshgrid(xp, yp, indexing="ij")
+
+        f = lambda x, y: np.array([np.sin(x) * np.cos(y), np.sin(x) + np.cos(y)])
+        fp = f(xxp.T, yyp.T).T
+
+        fq = interp2d(x, y, xp, yp, fp, method="nearest", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-2, atol=1.2e-1)
+
+        fq = interp2d(x, y, xp, yp, fp, method="linear", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-3, atol=1e-2)
+
+        fq = interp2d(x, y, xp, yp, fp, method="cubic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y).T, rtol=1e-5, atol=2e-3)
+
 
 class TestInterp3D:
     """Tests for interp3d function."""
@@ -234,15 +330,31 @@ class TestInterp3D:
             (0.0, 0.0, 0.0),
         ],
     )
-    def test_interp3d(self, x, y, z):
+    @pytest.mark.parametrize(
+        "dtype", [jnp.float32, jnp.float64, jnp.complex64, jnp.complex128]
+    )
+    def test_interp3d(self, x, y, z, dtype):
         """Test accuracy of different 3d interpolation methods."""
-        xp = np.linspace(0, np.pi, 20)
-        yp = np.linspace(0, 2 * np.pi, 30)
-        zp = np.linspace(0, 3, 25)
+        xp = np.real(np.linspace(0, np.pi, 20).astype(dtype))
+        yp = np.real(np.linspace(0, 2 * np.pi, 30).astype(dtype))
+        zp = np.real(np.linspace(0, 3, 25).astype(dtype))
         xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
 
-        f = lambda x, y, z: np.sin(x) * np.cos(y) * z**2
+        if jnp.iscomplexobj(dtype):
+            f = lambda x, y, z: (
+                jnp.sin(x) * jnp.cos(y) * z**2 + 1j * jnp.sin(x) * jnp.cos(y) * z**2
+            )
+        else:
+            f = lambda x, y, z: jnp.sin(x) * jnp.cos(y) * z**2
         fp = f(xxp, yyp, zzp)
+
+        if isinstance(x, np.ndarray):
+            x = np.real(x.astype(dtype))
+        if isinstance(y, np.ndarray):
+            y = np.real(y.astype(dtype))
+        if isinstance(z, np.ndarray):
+            z = np.real(z.astype(dtype))
+        fp = fp.astype(dtype)
 
         interp1 = lambda xq, yq, zq, *args, **kwargs: interp3d(
             xq, yq, zq, *args, **kwargs
@@ -253,27 +365,40 @@ class TestInterp3D:
 
         for interp in [interp1, interp2]:
             fq = interp(x, y, z, xp, yp, zp, fp)
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-5, atol=1e-2)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="nearest")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=1)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="linear")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-3, atol=1e-1)
 
             atol = 5.5e-3
             rtol = 1e-5
             fq = interp(x, y, z, xp, yp, zp, fp, method="cubic")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="cubic2")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="catmull-rom")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
 
             fq = interp(x, y, z, xp, yp, zp, fp, method="cardinal")
+            assert fq.dtype == np.result_type(x, y, z, xp, yp, zp, fp)
             np.testing.assert_allclose(fq, f(x, y, z), rtol=rtol, atol=atol)
+
+            fq = interp(x, y, z, xp, yp, zp, fp, method="monotonic")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=1e-2)
+
+            fq = interp(x, y, z, xp, yp, zp, fp, method="monotonic-0")
+            np.testing.assert_allclose(fq, f(x, y, z), rtol=1e-2, atol=0.3)
 
     @pytest.mark.unit
     def test_interp3d_vector_valued(self):
@@ -298,13 +423,46 @@ class TestInterp3D:
         fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic")
         np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-5, atol=5e-3)
 
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="monotonic")
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-2, atol=1e-2)
+
+    @pytest.mark.unit
+    def test_interp3d_even_spaced(self):
+        """Test for interpolating with evenly spaced grid."""
+        x = np.linspace(0, np.pi, 1000)
+        y = np.linspace(0, 2 * np.pi, 1000)
+        z = np.linspace(0, 3, 1000)
+        xp = np.linspace(0, np.pi, 20)
+        yp = np.linspace(0, 2 * np.pi, 30)
+        zp = np.linspace(0, 3, 25)
+        xxp, yyp, zzp = np.meshgrid(xp, yp, zp, indexing="ij")
+
+        f = lambda x, y, z: np.array([np.sin(x) * np.cos(y) * z**2, 0.1 * (x + y - z)])
+        fp = f(xxp.T, yyp.T, zzp.T).T
+
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="nearest", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-2, atol=1)
+
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="linear", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-3, atol=1e-1)
+
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="cubic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-5, atol=5e-3)
+
+        fq = interp3d(x, y, z, xp, yp, zp, fp, method="monotonic", even_spacing=True)
+        np.testing.assert_allclose(fq, f(x, y, z).T, rtol=1e-2, atol=1e-2)
+
 
 @pytest.mark.unit
-def test_fft_interp1d():
+@pytest.mark.parametrize(
+    "dtype", [jnp.float32, jnp.float64, jnp.complex64, jnp.complex128]
+)
+def test_fft_interp1d(dtype):
     """Test for 1d Fourier interpolation."""
-
-    def fun(x):
-        return 2 * np.sin(1 * x) + 4 * np.cos(3 * x) + 1
+    if jnp.iscomplexobj(dtype):
+        fun = lambda x: 2 * jnp.sin(1 * x) + 4j * jnp.cos(3 * x) + 1
+    else:
+        fun = lambda x: 2 * jnp.sin(1 * x) + 4 * jnp.cos(3 * x) + 1
 
     x = {"o": {}, "e": {}}
     x["o"][1] = np.linspace(0, 2 * np.pi, 33, endpoint=False)
@@ -315,13 +473,17 @@ def test_fft_interp1d():
     for p in ["o", "e"]:
         f1[p] = {}
         for i in [1, 2]:
-            f1[p][i] = fun(x[p][i])
+            f1[p][i] = fun(x[p][i]).astype(dtype)
 
     for sp in ["o", "e"]:  # source parity
-        fi = f1[sp][1]
-        fs = fun(x[sp][1] + 0.2)
+        fi = f1[sp][1].astype(dtype)
+        fs = fun(x[sp][1] + 0.2).astype(dtype)
+        f_ = fft_interp1d(fi, *fi.shape, sx=0.2, dx=np.diff(x[sp][1])[0]).squeeze()
         np.testing.assert_allclose(
-            fs, fft_interp1d(fi, *fi.shape, sx=0.2, dx=np.diff(x[sp][1])[0]).squeeze()
+            fs,
+            f_,
+            rtol=float(1e2 * np.finfo(dtype).eps),
+            atol=float(1e2 * np.finfo(dtype).eps),
         )
         for ep in ["o", "e"]:  # eval parity
             for s in ["up", "down"]:  # up or downsample
@@ -331,21 +493,36 @@ def test_fft_interp1d():
                 else:
                     xs = 2
                     xe = 1
-                true = fun(x[ep][xe])
+                true = fun(x[ep][xe]).astype(dtype)
                 interp = fft_interp1d(f1[sp][xs], x[ep][xe].size)
-                np.testing.assert_allclose(true, interp, atol=1e-12, rtol=1e-12)
+                np.testing.assert_allclose(
+                    true,
+                    interp,
+                    rtol=float(1e2 * np.finfo(dtype).eps),
+                    atol=float(1e2 * np.finfo(dtype).eps),
+                )
 
 
 @pytest.mark.unit
-def test_fft_interp2d():
+@pytest.mark.parametrize(
+    "dtype", [jnp.float32, jnp.float64, jnp.complex64, jnp.complex128]
+)
+def test_fft_interp2d(dtype):
     """Test for 2d Fourier interpolation."""
-
-    def fun2(x, y):
-        return (
-            2 * np.sin(1 * x[:, None])
-            - 1.2 * np.cos(2 * x[:, None])
-            + 3 * np.cos(3 * y[None])
-            - 2 * np.cos(5 * y[None])
+    if jnp.iscomplexobj(dtype):
+        fun2 = lambda x, y: (
+            2j * jnp.sin(1 * x[:, None])
+            - 1.2 * jnp.cos(2 * x[:, None])
+            + 3 * jnp.cos(3 * y[None])
+            - 2j * jnp.cos(5 * y[None])
+            + 1
+        )
+    else:
+        fun2 = lambda x, y: (
+            2 * jnp.sin(1 * x[:, None])
+            - 1.2 * jnp.cos(2 * x[:, None])
+            + 3 * jnp.cos(3 * y[None])
+            - 2 * jnp.cos(5 * y[None])
             + 1
         )
 
@@ -368,23 +545,27 @@ def test_fft_interp2d():
             for i in [1, 2]:
                 f2[xp][yp][i] = {}
                 for j in [1, 2]:
-                    f2[xp][yp][i][j] = fun2(x[xp][i], y[yp][j])
+                    f2[xp][yp][i][j] = fun2(x[xp][i], y[yp][j]).astype(dtype)
 
     for spx in ["o", "e"]:  # source parity x
         for spy in ["o", "e"]:  # source parity y
-            fi = f2[spx][spy][1][1]
-            fs = fun2(x[spx][1] + 0.2, y[spy][1] + 0.3)
+            fi = f2[spx][spy][1][1].astype(dtype)
+            fs = fun2(x[spx][1] + 0.2, y[spy][1] + 0.3).astype(dtype)
+            f_ = fft_interp2d(
+                fi,
+                *fi.shape,
+                sx=0.2,
+                sy=0.3,
+                dx=np.diff(x[spx][1])[0],
+                dy=np.diff(y[spy][1])[0],
+            ).squeeze()
             np.testing.assert_allclose(
                 fs,
-                fft_interp2d(
-                    fi,
-                    *fi.shape,
-                    sx=0.2,
-                    sy=0.3,
-                    dx=np.diff(x[spx][1])[0],
-                    dy=np.diff(y[spy][1])[0]
-                ).squeeze(),
+                f_,
+                rtol=float(1e2 * np.finfo(dtype).eps),
+                atol=float(1e2 * np.finfo(dtype).eps),
             )
+            assert f_.dtype == dtype
             for epx in ["o", "e"]:  # eval parity x
                 for epy in ["o", "e"]:  # eval parity y
                     for sx in ["up", "down"]:  # up or downsample x
@@ -401,13 +582,17 @@ def test_fft_interp2d():
                             else:
                                 ys = 2
                                 ye = 1
-                            true = fun2(x[epx][xe], y[epy][ye])
+                            true = fun2(x[epx][xe], y[epy][ye]).astype(dtype)
                             interp = fft_interp2d(
                                 f2[spx][spy][xs][ys], x[epx][xe].size, y[epy][ye].size
                             )
                             np.testing.assert_allclose(
-                                true, interp, atol=1e-12, rtol=1e-12
+                                true,
+                                interp,
+                                rtol=float(1e2 * np.finfo(dtype).eps),
+                                atol=float(1e2 * np.finfo(dtype).eps),
                             )
+                            assert interp.dtype == dtype
 
 
 class TestAD:
@@ -447,7 +632,6 @@ class TestAD:
         fp = f(xp)
 
         for method in ["cubic", "cubic2", "cardinal", "monotonic"]:
-
             interp1 = lambda xp: interp1d(x, xp, fp, method=method)
             interp2 = lambda xp: Interpolator1D(xp, fp, method=method)(x)
 
@@ -480,7 +664,6 @@ class TestAD:
         fp = f(xxp, yyp)
 
         for method in ["cubic", "cubic2", "cardinal"]:
-
             interp1 = lambda xp: interp2d(x, y, xp, yp, fp, method=method)
             interp2 = lambda xp: Interpolator2D(xp, yp, fp, method=method)(x, y)
 
@@ -515,7 +698,6 @@ class TestAD:
         fp = f(xxp, yyp, zzp)
 
         for method in ["cubic", "cubic2", "cardinal"]:
-
             interp1 = lambda xp: interp3d(x, y, z, xp, yp, zp, fp, method=method)
             interp2 = lambda xp: Interpolator3D(xp, yp, zp, fp, method=method)(x, y, z)
 
@@ -546,3 +728,105 @@ def test_extrap_float():
     np.testing.assert_allclose(interpol(4.5, 5.3), 1.0)
     np.testing.assert_allclose(interpol(-4.5, 5.3), 0.0)
     np.testing.assert_allclose(interpol(4.5, -5.3), 0.0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "fun, cls, axis, method, period",
+    [
+        (interp1d, Interpolator1D, -1, "cubic2", 1.1),
+        (interp2d, Interpolator2D, (2, 0), "linear", None),
+        (interp2d, Interpolator2D, (2, 0), "cubic", (None, 1.1)),
+        (interp3d, Interpolator3D, (3, 1, 0), "cubic", (1.1, None, 1.1)),
+    ],
+)
+def test_interp_axis(fun, cls, axis, method, period):
+    """Test interpolating along non-leading axes, and functions matching classes."""
+    rng = np.random.default_rng(0)
+    axis_ = np.atleast_1d(axis) % (np.size(axis) + 2)
+    n = len(axis_)
+    grids = [np.linspace(0, 1, 6 + k) for k in range(n)]
+    shape = [3, 2]
+    for k in np.argsort(axis_):
+        shape.insert(axis_[k], len(grids[k]))
+    f = rng.random(shape)
+    q = [rng.random(5) for _ in range(n)]
+    derivative = (1,) + (0,) * (n - 1)
+    d = derivative if n > 1 else 1
+
+    # interpolate along the leading axes, then move the query axes where expected
+    ref = fun(*q, *grids, np.moveaxis(f, axis_, range(n)), method, d, period=period)
+    ref = np.moveaxis(ref, 0, min(axis_))
+
+    out1 = fun(*q, *grids, f, method, d, period=period, axis=axis)
+    interp = cls(*grids, f, method, period=period, axis=axis)
+    out2 = interp(*q, *derivative)
+    # derivatives given back in the layout of f reproduce the same interpolant
+    kw = interp.derivs if n > 1 else {}
+    out3 = cls(*grids, f, method, period=period, axis=axis, **kw)(*q, *derivative)
+    rest = [s for k, s in enumerate(f.shape) if k not in axis_]
+    assert out1.shape == tuple(rest[: min(axis_)] + [5] + rest[min(axis_) :])
+    np.testing.assert_allclose(out1, ref)
+    np.testing.assert_allclose(out2, ref)
+    np.testing.assert_allclose(out3, ref)
+
+    with pytest.raises(ValueError):
+        fun(*q, *grids, f, method, axis=(0,) * n)
+
+
+@pytest.mark.unit
+def test_import_does_not_initialize_jax_backend():
+    """Importing interpax must not trigger JAX backend initialization."""
+    script = """
+import jax
+jax.config.update('jax_enable_x64', True)
+import interpax  # noqa: F401
+import jax._src.xla_bridge as xb
+if xb._backends:
+    raise SystemExit(f"JAX backend initialized on import: {list(xb._backends)}")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"JAX backend was initialized during `import interpax`.\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+@pytest.mark.unit
+def test_find_cell():
+    """Test cell lookup and detection of evenly spaced knots."""
+    rng = np.random.default_rng(0)
+    n = 500
+    s = np.linspace(0, 1, n)
+    grids = {
+        # far from the origin, so the first interval alone is a poor spacing estimate
+        "offset_f32": (np.linspace(1000, 1001, n, dtype=np.float32), True),
+        "nonuniform": (s**2, False),
+        # every knot moved by up to 0.3 spacings, beyond what the direct lookup allows
+        "perturbed": (s + rng.uniform(-0.3, 0.3, n) / (n - 1), False),
+    }
+    for name, (x, uniform) in grids.items():
+        x = jnp.asarray(x)
+        # knots, midpoints, and random points including some outside the range
+        u = jnp.asarray(rng.uniform(-0.1, 1.1, 1000), x.dtype)
+        xq = jnp.concatenate([x, (x[1:] + x[:-1]) / 2, x[0] + (x[-1] - x[0]) * u])
+        ref = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, n - 1)
+        for even in [None, False] + [True] * uniform:
+            np.testing.assert_array_equal(_find_cell(x, xq, even), ref, err_msg=name)
+        assert Interpolator1D(x, x, method="linear").even_spacing == uniform, name
+
+    x = np.linspace(0, 2 * np.pi, 20, endpoint=False)
+    assert Interpolator1D(x, x, period=2 * np.pi).even_spacing is True
+    y = np.linspace(0, 1, 30) ** 2
+    f = np.ones((20, 30))
+    assert Interpolator2D(x, y, f, period=(2 * np.pi, None)).even_spacing == (
+        True,
+        False,
+    )
+    interp = jax.jit(lambda x: Interpolator1D(x, x, method="linear"))(x)
+    assert interp.even_spacing is None

@@ -1,12 +1,17 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
-from jax import jit
+from jaxtyping import Array, ArrayLike, Inexact, Num
+
+from .utils import asarray_inexact, errorif, wrap_jit
 
 
-@partial(jit, static_argnames="n")
-def fft_interp1d(f: jax.Array, n: int, sx: jax.Array = None, dx: float = 1.0):
+@wrap_jit(static_argnames=["n"])
+def fft_interp1d(
+    f: Num[ArrayLike, "nx ..."],
+    n: int,
+    sx: Num[ArrayLike, " s"] | None = None,
+    dx: float = 1.0,
+) -> Inexact[Array, "n ... s"]:
     """Interpolation of a 1d periodic function via FFT.
 
     Parameters
@@ -25,9 +30,11 @@ def fft_interp1d(f: jax.Array, n: int, sx: jax.Array = None, dx: float = 1.0):
     fi : ndarray, shape(n, ..., len(sx))
         Interpolated (and possibly shifted) data points
     """
+    f = asarray_inexact(f)
     c = jnp.fft.ifft(f, axis=0)
     nx = c.shape[0]
     if sx is not None:
+        sx = asarray_inexact(sx)
         sx = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(nx)[:, None] * sx / dx)
         c = (c[None].T * sx).T
         c = jnp.moveaxis(c, 0, -1)
@@ -35,19 +42,23 @@ def fft_interp1d(f: jax.Array, n: int, sx: jax.Array = None, dx: float = 1.0):
     if nx % 2 != 0:
         pad = pad[::-1]
     c = jnp.fft.ifftshift(_pad_along_axis(jnp.fft.fftshift(c, axes=0), pad, axis=0))
-    return jnp.fft.fft(c, axis=0).real
+    out = jnp.fft.fft(c, axis=0)
+    if jnp.iscomplexobj(f):
+        return out.astype(f.dtype)
+    else:
+        return (out.real).astype(f.dtype)
 
 
-@partial(jit, static_argnames=("n1", "n2"))
+@wrap_jit(static_argnames=["n1", "n2"])
 def fft_interp2d(
-    f: jax.Array,
+    f: Num[ArrayLike, "nx ny ..."],
     n1: int,
     n2: int,
-    sx: jax.Array = None,
-    sy: jax.Array = None,
+    sx: Num[ArrayLike, " s"] | None = None,
+    sy: Num[ArrayLike, " s"] | None = None,
     dx: float = 1.0,
     dy: float = 1.0,
-):
+) -> Inexact[Array, "n1 n2 ... s"]:
     """Interpolation of a 2d periodic function via FFT.
 
     Parameters
@@ -67,9 +78,17 @@ def fft_interp2d(
     fi : ndarray, shape(n1, n2, ..., len(sx))
         Interpolated (and possibly shifted) data points
     """
+    errorif(
+        (sx is None) != (sy is None),
+        ValueError,
+        "sx and sy must both be provided or both be None",
+    )
+    f = asarray_inexact(f)
     c = jnp.fft.ifft2(f, axes=(0, 1))
     nx, ny = c.shape[:2]
     if (sx is not None) and (sy is not None):
+        sx = asarray_inexact(sx)
+        sy = asarray_inexact(sy)
         sx = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(nx)[:, None] * sx / dx)
         sy = jnp.exp(-1j * 2 * jnp.pi * jnp.fft.fftfreq(ny)[:, None] * sy / dy)
         c = (c[None].T * sx[None, :, :] * sy[:, None, :]).T
@@ -88,7 +107,11 @@ def fft_interp2d(
         _pad_along_axis(jnp.fft.fftshift(c, axes=1), pady, axis=1), axes=1
     )
 
-    return jnp.fft.fft2(c, axes=(0, 1)).real
+    out = jnp.fft.fft2(c, axes=(0, 1))
+    if jnp.iscomplexobj(f):
+        return out.astype(f.dtype)
+    else:
+        return (out.real).astype(f.dtype)
 
 
 def _pad_along_axis(array: jax.Array, pad: tuple = (0, 0), axis: int = 0):

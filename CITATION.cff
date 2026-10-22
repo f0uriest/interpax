@@ -9,8 +9,7 @@ type: software
 authors:
   - given-names: Rory
     family-names: Conlin
-    email: wconlin@princeton.edu
-    affiliation: Princeton University
+    email: mail@fouriest.net
     orcid: 'https://orcid.org/0000-0001-8366-2111'
 identifiers:
   - type: doi

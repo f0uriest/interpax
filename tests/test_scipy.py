@@ -38,6 +38,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import io
 import warnings
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.interpolate
@@ -58,6 +60,7 @@ from interpax import (
     CubicSpline,
     PchipInterpolator,
     PPoly,
+    RBFInterpolator,
 )
 
 jax_config.update("jax_enable_x64", True)
@@ -181,7 +184,7 @@ class TestPPolyCommon:
     def test_ctor_c(self):
         # wrong shape: `c` must be at least 2D
         with assert_raises(ValueError):
-            PPoly([1, 2], [0, 1])
+            PPoly(np.array([1, 2]), np.array([0, 1]))
 
     def test_extend(self):
         # Test adding new points to the piecewise polynomial
@@ -231,6 +234,7 @@ class TestPPolyCommon:
         c = np.random.rand(3, 4, 5, 6, 7, 8)
         c_s = c.shape
         xp = np.random.random((1, 2))
+        x = np.empty(1)
         for axis in (0, 1, 2, 3):
             m = c.shape[axis + 1]
             x = np.sort(np.random.rand(m + 1))
@@ -256,7 +260,7 @@ class TestPPolyCommon:
         # we expect 0 <= axis < c.ndim-1; raise otherwise
         for axis in (-1, 4, 5, 6):
             for cls in (PPoly,):
-                assert_raises(ValueError, cls, **dict(c=c, x=x, axis=axis))
+                assert_raises(ValueError, cls, c=c, x=x, axis=axis)
 
 
 class TestPolySubclassing:
@@ -270,7 +274,7 @@ class TestPolySubclassing:
         np.random.seed(1234)
         x = np.sort(np.random.random(3))
         c = np.random.random((4, 2))
-        return self.P(c, x), self.B(c, x)
+        return self.P(c, x), self.B(c, x)  # pyright: ignore
 
     def test_derivative(self):
         pp, bp = self._make_polynomials()
@@ -390,17 +394,21 @@ class TestPPoly:
 
         xi = np.linspace(0, 1, 200)
         for dx in range(0, 10):
-            assert_allclose(pp(xi, dx), pp.derivative(dx)(xi), err_msg="dx=%d" % (dx,))
+            assert_allclose(pp(xi, dx), pp.derivative(dx)(xi), err_msg=f"dx={dx}")
 
     def test_antiderivative_of_constant(self):
         # https://github.com/scipy/scipy/issues/4216
-        p = PPoly([[1.0]], [0, 1])
-        assert_array_equal(p.antiderivative().c, PPoly([[1], [0]], [0, 1]).c)
-        assert_array_equal(p.antiderivative().x, PPoly([[1], [0]], [0, 1]).x)
+        p = PPoly(np.array([[1.0]]), np.array([0, 1]))
+        assert_array_equal(
+            p.antiderivative().c, PPoly(np.array([[1], [0]]), np.array([0, 1])).c
+        )
+        assert_array_equal(
+            p.antiderivative().x, PPoly(np.array([[1], [0]]), np.array([0, 1])).x
+        )
 
     def test_antiderivative_regression_4355(self):
         # https://github.com/scipy/scipy/issues/4355
-        p = PPoly([[1.0, 0.5]], [0, 1, 2])
+        p = PPoly(np.array([[1.0, 0.5]]), np.array([0, 1, 2]))
         q = p.antiderivative()
         assert_array_equal(q.c, [[1, 0.5], [0, 1]])
         assert_array_equal(q.x, [0, 1, 2])
@@ -461,7 +469,7 @@ class TestPPoly:
                     pp2(pp2.x[1:]),
                     pp2(endpoint),
                     rtol=1e-7,
-                    err_msg="dx=%d k=%d" % (dx, k),
+                    err_msg=f"dx={dx} k={k}",
                 )
 
     def test_antiderivative_continuity(self):
@@ -492,7 +500,7 @@ class TestPPoly:
 
         ipp = pp.antiderivative()
         assert_allclose(ig, ipp(b) - ipp(a))
-        assert_allclose(ig, splint(a, b, spl))
+        assert_allclose(ig, np.asarray(splint(a, b, spl)))
 
         a, b = -0.3, 0.9
         ig = pp.integrate(a, b, extrapolate=True)
@@ -540,6 +548,7 @@ class TestPPoly:
         # 1 - x**2
         c = np.array([[-1, 0, 1]]).T
         x = np.array([0, 1])
+        x1 = 1 / 2
 
         for extrapolate in [True, False, None]:
             pp = PPoly(c, x, extrapolate=extrapolate)
@@ -547,13 +556,95 @@ class TestPPoly:
             pp_i = pp.antiderivative()
 
             if extrapolate is False:
-                assert_(np.isnan(pp([-0.1, 1.1])).all())
-                assert_(np.isnan(pp_i([-0.1, 1.1])).all())
-                assert_(np.isnan(pp_d([-0.1, 1.1])).all())
+                assert_(np.isnan(pp(np.array([-0.1, 1.1]))).all())
+                assert_(np.isnan(pp_i(np.array([-0.1, 1.1]))).all())
+                assert_(np.isnan(pp_d(np.array([-0.1, 1.1]))).all())
             else:
-                assert_allclose(pp([-0.1, 1.1]), [1 - 0.1**2, 1 - 1.1**2])
-                assert_(not np.isnan(pp_i([-0.1, 1.1])).any())
-                assert_(not np.isnan(pp_d([-0.1, 1.1])).any())
+                assert_allclose(pp(np.array([-0.1, 1.1])), [1 - 0.1**2, 1 - 1.1**2])
+                assert_(not np.isnan(pp_i(np.array([-0.1, 1.1]))).any())
+                assert_(not np.isnan(pp_d(np.array([-0.1, 1.1]))).any())
+
+            # extra test for gh#85
+            assert pp(x1).shape == ()
+            assert pp_d(x1).shape == ()
+            assert pp_i(x1).shape == ()
+
+    def test_roots_special_cases(self):
+        def nonfill(r, n):
+            # roots come first, padding after
+            assert_(np.isnan(r[n:]).all())
+            return r[:n]
+
+        # identically zero sections, also for solve with a constant section
+        c = np.array([[-1, 0.25], [0, 0], [-1, 0.25]]).T
+        x = np.array([0, 0.4, 0.6, 1.0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(), 4), [0.25, 0.4, np.nan, 0.85])
+        c1 = c.copy().astype(float)
+        c1[1, :] += 2.0
+        assert_array_equal(
+            nonfill(PPoly(c1, x).solve(2.0), 4), [0.25, 0.4, np.nan, 0.85]
+        )
+
+        # root repeated in neighboring sections is reported once
+        c = np.array([[1, 0, -1], [-1, 0, 0]]).T
+        x = np.array([-1, 0, 1])
+        assert_array_equal(nonfill(PPoly(c, x).roots(), 2), [-2, 0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(extrapolate=False), 1), [0])
+        assert_array_equal(nonfill(PPoly(c, x).roots(extrapolate="periodic"), 1), [0])
+
+        # sign change across a discontinuity
+        c = np.array([[1.0], [-1.0]]).T
+        pp = PPoly(c, np.array([0, 1, 2]))
+        assert_array_equal(nonfill(pp.roots(), 1), [1.0])
+        assert_(np.isnan(pp.roots(discontinuity=False)).all())
+
+        # double root, leading zero coefficients, constant polynomial
+        pp = PPoly(np.array([[1, -1, 0.25]]).T, np.array([0, 1]))
+        assert_allclose(nonfill(pp.roots(), 1), [0.5], atol=1e-7)
+        pp = PPoly(np.array([[0, 0, 1, -0.5]]).T, np.array([0, 1]))
+        assert_allclose(nonfill(pp.roots(), 1), [0.5])
+        pp = PPoly(np.array([[1.0, -1.0]]), np.array([0, 1, 2]))
+        assert_array_equal(nonfill(pp.roots(), 1), [1.0])
+
+        with pytest.raises(ValueError):
+            PPoly(np.array([[1j, 1]]).T, np.array([0, 1])).roots()
+
+    def test_roots_vs_scipy(self):
+        rng = np.random.default_rng(1234)
+        m = 6
+        x = np.sort(rng.uniform(-2, 2, m + 1))
+        for k in [1, 2, 4, 6]:
+            c = rng.normal(size=(k, m, 3))
+            y = rng.normal(size=3)
+            for extrapolate in [True, False]:
+                r = PPoly(c, x).solve(y, extrapolate=extrapolate)
+                assert r.shape == (3, m * (max(k - 1, 2) + 1))
+                for i in range(3):
+                    r_scipy = scipy.interpolate.PPoly(c[..., i], x).solve(
+                        y[i], extrapolate=extrapolate
+                    )
+                    n = r_scipy.size
+                    assert_(np.isnan(r[i, n:]).all())
+                    assert_allclose(r[i, :n], np.sort(r_scipy), atol=1e-10)
+
+    def test_roots_size_jit_grad(self):
+        # (x - 0.5) * (x - 1.5) * (x - 2.5) as a cubic spline on [0, 3]
+        xk = np.linspace(0, 3, 4)
+        pp = CubicSpline(xk, (xk - 0.5) * (xk - 1.5) * (xk - 2.5))
+        assert_allclose(pp.roots(size=5, fill_value=-1.0), [0.5, 1.5, 2.5, -1, -1])
+        assert_allclose(pp.roots(size=2), [0.5, 1.5])
+
+        # derivative of a root with respect to the data is -(dp/dtheta) / p'(root)
+        def root(a, b):
+            c = jnp.stack([jnp.ones_like(a), a, b])[:, None]
+            spline = PPoly(c, np.array([0.0, 4.0]), check=False)
+            return spline.roots(size=2, extrapolate=False)[0]
+
+        a, b = -3.0, 2.0  # t^2 - 3t + 2 = (t - 1)(t - 2)
+        assert_allclose(jax.jit(root)(a, b), 1.0)
+        g = jax.jit(jax.grad(root, argnums=(0, 1)))(a, b)
+        dp = 2 * 1.0 + a  # p'(1)
+        assert_allclose(g, (-1.0 / dp, -1.0 / dp))
 
 
 def _ppoly_eval_1(c, x, xps):
@@ -702,16 +793,22 @@ class TestPCHIP:
         # while there are only two points available.
         # Instead, it should construct a linear interpolator.
         x = np.linspace(0, 1, 11)
-        p = PchipInterpolator([0, 1], [0, 2])
+        p = PchipInterpolator(np.array([0, 1]), np.array([0, 2]))
         assert_allclose(p(x), 2 * x, atol=1e-15)
 
     def test_PchipInterpolator(self):
         assert_array_almost_equal(
-            PchipInterpolator([1, 2, 3], [4, 5, 6])([0.5], nu=1), [1.0]
+            PchipInterpolator(np.array([1, 2, 3]), np.array([4, 5, 6]))(
+                np.array([0.5]), nu=1
+            ),
+            [1.0],
         )
 
         assert_array_almost_equal(
-            PchipInterpolator([1, 2, 3], [4, 5, 6])([0.5], nu=0), [3.5]
+            PchipInterpolator(np.array([1, 2, 3]), np.array([4, 5, 6]))(
+                np.array([0.5]), nu=0
+            ),
+            [3.5],
         )
 
 
@@ -765,7 +862,12 @@ class TestCubicSpline:
             assert_allclose(S(x[0], 2), 0, rtol=tol, atol=tol)
         else:
             order, value = bc_start
-            assert_allclose(S(x[0], order), value, rtol=tol, atol=tol)
+            assert_allclose(
+                S(x[0], order),
+                value,  # pyright: ignore
+                rtol=tol,
+                atol=tol,
+            )
 
         if bc_end == "not-a-knot":
             if x.size == 2:
@@ -779,7 +881,12 @@ class TestCubicSpline:
             assert_allclose(S(x[-1], 2), 0, rtol=2 * tol, atol=2 * tol)
         else:
             order, value = bc_end
-            assert_allclose(S(x[-1], order), value, rtol=tol, atol=tol)
+            assert_allclose(
+                S(x[-1], order),
+                value,  # pyright: ignore
+                rtol=tol,
+                atol=tol,
+            )
 
     def check_all_bc(self, x, y, axis):
         deriv_shape = list(y.shape)
@@ -817,6 +924,36 @@ class TestCubicSpline:
             Y[1, :, 1] = y[:n] + 3
             self.check_all_bc(x[:n], Y, 1)
 
+    def test_periodic(self):
+        for n in [2, 3, 5]:
+            x = np.linspace(0, 2 * np.pi, n)
+            y = np.cos(x)
+            S = CubicSpline(x, y, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+
+            Y = np.empty((2, n, 2))
+            Y[0, :, 0] = y
+            Y[0, :, 1] = y + 2
+            Y[1, :, 0] = y - 1
+            Y[1, :, 1] = y + 5
+            S = CubicSpline(x, Y, axis=1, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+
+        # non-uniform spacing and complex values, compared against scipy
+        x = np.array([0.0, 0.3, 1.1, 1.5, 2.8, 3.0, 4.2, 5.0])
+        for n in [3, 4, x.size]:
+            xx = x[:n]
+            y = np.cos(2 * np.pi * xx / xx[-1]) + 1j * np.sin(2 * np.pi * xx / xx[-1])
+            y[-1] = y[0]
+            S = CubicSpline(xx, y, bc_type="periodic")
+            S_scipy = scipy.interpolate.CubicSpline(xx, y, bc_type="periodic")
+            self.check_correctness(S, "periodic", "periodic")
+            assert_allclose(S.c, S_scipy.c, rtol=1e-12, atol=1e-12)
+            assert S.extrapolate == "periodic"
+            xq = np.linspace(-6, 11, 50)
+            assert_allclose(S(xq), S_scipy(xq), rtol=1e-12, atol=1e-12)
+            assert_allclose(S(xq), S(xq + xx[-1] - xx[0]), rtol=1e-12, atol=1e-12)
+
     def test_dtypes(self):
         x = np.array([0, 1, 2, 3], dtype=int)
         y = np.array([-5, 2, 3, 1], dtype=int)
@@ -828,11 +965,11 @@ class TestCubicSpline:
         self.check_correctness(S)
 
         S = CubicSpline(x, x**3, bc_type=("natural", (1, 2j)))
-        self.check_correctness(S, "natural", (1, 2j))
+        self.check_correctness(S, "natural", (1, 2j))  # pyright: ignore
 
         y = np.array([-5, 2, 3, 1])
         S = CubicSpline(x, y, bc_type=[(1, 2 + 0.5j), (2, 0.5 - 1j)])
-        self.check_correctness(S, (1, 2 + 0.5j), (2, 0.5 - 1j))
+        self.check_correctness(S, (1, 2 + 0.5j), (2, 0.5 - 1j))  # pyright: ignore
 
     def test_incorrect_inputs(self):
         x = np.array([1, 2, 3, 4])
@@ -841,9 +978,9 @@ class TestCubicSpline:
         xn = np.array([np.nan, 2, 3, 4])
         xo = np.array([2, 1, 3, 4])
         yn = np.array([np.nan, 2, 3, 4])
-        y3 = [1, 2, 3]
-        x1 = [1]
-        y1 = [1]
+        y3 = np.array([1, 2, 3])
+        x1 = np.array([1])
+        y1 = np.array([1])
 
         assert_raises(ValueError, CubicSpline, xc, y)
         assert_raises(ValueError, CubicSpline, xn, y)
@@ -859,6 +996,7 @@ class TestCubicSpline:
             ((1, 0),),
             (0.0, 0.0),
             "not-a-typo",
+            "periodic",  # y[0] != y[-1]
         ]
 
         for bc_type in wrong_bc:
@@ -875,19 +1013,433 @@ class TestCubicSpline:
 
 
 def test_CubicHermiteSpline_correctness():
-    x = [0, 2, 7]
-    y = [-1, 2, 3]
-    dydx = [0, 3, 7]
+    x = np.array([0, 2, 7])
+    y = np.array([-1, 2, 3])
+    dydx = np.array([0, 3, 7])
     s = CubicHermiteSpline(x, y, dydx)
     assert_allclose(s(x), y, rtol=1e-15)
     assert_allclose(s(x, 1), dydx, rtol=1e-15)
 
 
 def test_CubicHermiteSpline_error_handling():
-    x = [1, 2, 3]
-    y = [0, 3, 5]
-    dydx = [1, -1, 2, 3]
+    x = np.array([1, 2, 3])
+    y = np.array([0, 3, 5])
+    dydx = np.array([1, -1, 2, 3])
     assert_raises(ValueError, CubicHermiteSpline, x, y, dydx)
 
-    dydx_with_nan = [1, 0, np.nan]
+    dydx_with_nan = np.array([1, 0, np.nan])
     assert_raises(ValueError, CubicHermiteSpline, x, y, dydx_with_nan)
+
+
+class TestRBFInterpolator:
+    """Test RBF interpolation for SciPy API compatibility."""
+
+    def _make_test_data_1d(self):
+        """Create 1D test data."""
+        x = np.linspace(0, 1, 10)
+        y = np.sin(2 * np.pi * x)
+        return x[:, None], y
+
+    def _make_test_data_2d(self):
+        """Create 2D test data."""
+        x = np.linspace(0, 1, 5)
+        y = np.linspace(0, 1, 5)
+        X, Y = np.meshgrid(x, y)
+        Z = np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
+        points = np.column_stack((X.ravel(), Y.ravel()))
+        values = Z.ravel()
+        return points, values
+
+    def test_eval_1d(self):
+        """Test basic evaluation in 1D against SciPy."""
+        x, y = self._make_test_data_1d()
+
+        # Test with thin plate spline (doesn't require epsilon)
+        rbf_jax = RBFInterpolator(x, y, kernel="thin_plate_spline")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(x, y, kernel="thin_plate_spline")
+
+        # Test points
+        x_test = np.linspace(0, 1, 20)[:, None]
+
+        # Evaluate
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        # Compare
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_eval_2d(self):
+        """Test basic evaluation in 2D against SciPy."""
+        points, values = self._make_test_data_2d()
+
+        # Test with cubic kernel
+        rbf_jax = RBFInterpolator(points, values, kernel="cubic")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(points, values, kernel="cubic")
+
+        # Test points
+        x_test = np.linspace(0, 1, 10)
+        y_test = np.linspace(0, 1, 10)
+        X_test, Y_test = np.meshgrid(x_test, y_test)
+        points_test = np.column_stack((X_test.ravel(), Y_test.ravel()))
+
+        # Evaluate
+        values_jax = rbf_jax(points_test)
+        values_scipy = rbf_scipy(points_test)
+
+        # Compare
+        assert_allclose(values_jax, values_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_vector_valued(self):
+        """Test vector-valued functions."""
+        x, y = self._make_test_data_1d()
+        # Create vector-valued function
+        y_vector = np.column_stack((y, 2.0 * y))
+
+        rbf_jax = RBFInterpolator(x, y_vector, kernel="thin_plate_spline")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(
+            x, y_vector, kernel="thin_plate_spline"
+        )
+
+        x_test = np.linspace(0, 1, 15)[:, None]
+
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_multidimensional_values(self):
+        """Test 3D array of values."""
+        x, y_ = self._make_test_data_1d()
+        # Create 3D array of values
+        y = np.empty((10, 2, 2))
+        y[:, 0, 0] = y_
+        y[:, 1, 0] = 2.0 * y_
+        y[:, 0, 1] = 3.0 * y_
+        y[:, 1, 1] = 4.0 * y_
+
+        rbf_jax = RBFInterpolator(x, y, kernel="thin_plate_spline")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(x, y, kernel="thin_plate_spline")
+
+        x_test = np.linspace(0, 1, 8)[:, None]
+
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_complex_values(self):
+        """Test interpolation with complex values."""
+        x, _ = self._make_test_data_1d()
+        y = np.exp(2j * np.pi * x.ravel())
+
+        rbf_jax = RBFInterpolator(x, y, kernel="thin_plate_spline")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(x, y, kernel="thin_plate_spline")
+
+        x_test = np.linspace(0, 1, 20)[:, None]
+
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_smoothing(self):
+        """Test smoothing parameter."""
+        x, y = self._make_test_data_1d()
+        smoothing = 0.1
+
+        rbf_jax = RBFInterpolator(x, y, kernel="thin_plate_spline", smoothing=smoothing)
+        rbf_scipy = scipy.interpolate.RBFInterpolator(
+            x, y, kernel="thin_plate_spline", smoothing=smoothing
+        )
+
+        x_test = np.linspace(0, 1, 20)[:, None]
+
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_polynomial_degree(self):
+        """Test different polynomial degrees."""
+        x, y = self._make_test_data_1d()
+
+        for degree in [-1, 0, 1, 2]:
+            warns = degree < 1 and degree != -1
+            if warns:
+                with pytest.warns(UserWarning):
+                    rbf_jax = RBFInterpolator(
+                        x, y, kernel="thin_plate_spline", degree=degree
+                    )
+                with pytest.warns(UserWarning):
+                    rbf_scipy = scipy.interpolate.RBFInterpolator(
+                        x, y, kernel="thin_plate_spline", degree=degree
+                    )
+            else:
+                rbf_jax = RBFInterpolator(
+                    x, y, kernel="thin_plate_spline", degree=degree
+                )
+                rbf_scipy = scipy.interpolate.RBFInterpolator(
+                    x, y, kernel="thin_plate_spline", degree=degree
+                )
+
+            x_test = np.linspace(0, 1, 20)[:, None]
+
+            y_jax = rbf_jax(x_test)
+            y_scipy = rbf_scipy(x_test)
+
+            assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_kernels_basic(self):
+        """Test basic kernels that don't require epsilon."""
+        x, y = self._make_test_data_1d()
+        kernels = ["linear", "thin_plate_spline", "cubic", "quintic"]
+
+        for kernel in kernels:
+            rbf_jax = RBFInterpolator(x, y, kernel=kernel)
+            rbf_scipy = scipy.interpolate.RBFInterpolator(x, y, kernel=kernel)
+
+            x_test = np.linspace(0, 1, 15)[:, None]
+
+            y_jax = rbf_jax(x_test)
+            y_scipy = rbf_scipy(x_test)
+
+            assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_epsilon_kernels(self):
+        """Test kernels that require epsilon parameter."""
+        x, y = self._make_test_data_1d()
+        kernels = [
+            "multiquadric",
+            "inverse_multiquadric",
+            "inverse_quadratic",
+            "gaussian",
+        ]
+        epsilon = 1.0
+
+        for kernel in kernels:
+            rbf_jax = RBFInterpolator(x, y, kernel=kernel, epsilon=epsilon)
+            rbf_scipy = scipy.interpolate.RBFInterpolator(
+                x, y, kernel=kernel, epsilon=epsilon
+            )
+
+            x_test = np.linspace(0, 1, 15)[:, None]
+
+            y_jax = rbf_jax(x_test)
+            y_scipy = rbf_scipy(x_test)
+
+            if kernel == "gaussian":
+                assert_allclose(y_jax, y_scipy, rtol=5e-8, atol=5e-8)
+            else:
+                assert_allclose(y_jax, y_scipy, rtol=1e-8, atol=1e-8)
+
+    def test_dtypes(self):
+        """Test different data types."""
+        # Integer coordinates and values
+        x = np.array([[0], [1], [2], [3]], dtype=int)
+        y = np.array([1, 4, 2, 5], dtype=int)
+
+        rbf_jax = RBFInterpolator(x, y, kernel="linear")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(
+            x,
+            y,
+            kernel="linear",
+        )
+
+        x_test = np.array([[0.5], [1.5], [2.5]], dtype=float)
+
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+        x32 = np.array([[0.0], [1.0], [2.0]], dtype=np.float32)
+        y32 = np.array([0.0, 1.0, -0.5], dtype=np.float32)
+        rbf_jax = RBFInterpolator(x32, y32, kernel="linear")
+        y32_out = rbf_jax(np.array([[0.5]], dtype=np.float32))
+        assert_equal(y32_out.dtype, np.dtype(np.float32))
+
+        y64 = np.array([0.0, 1.0, -0.5], dtype=np.float64)
+        rbf_jax = RBFInterpolator(x32, y64, kernel="linear")
+        y64_out = rbf_jax(np.array([[0.5]], dtype=np.float32))
+        assert_equal(y64_out.dtype, np.dtype(np.float64))
+
+        y_complex = np.array([0.0 + 0.0j, 1.0 + 2.0j, -0.5 + 0.25j], dtype=np.complex64)
+        rbf_jax = RBFInterpolator(x32, y_complex, kernel="linear")
+        y_complex_out = rbf_jax(np.array([[0.5]], dtype=np.float32))
+        assert_equal(y_complex_out.dtype, np.dtype(np.complex64))
+
+        # output follows standard promotion of all inputs, python scalars are weak
+        p32 = np.array([[0.5]], dtype=np.float32)
+        cases = [
+            (x32, y32, dict(epsilon=1.0, smoothing=0.1), p32, np.float32),
+            (x32, y32, dict(epsilon=np.float64(1.0)), p32, np.float64),
+            (x32, y32, dict(epsilon=1.0, smoothing=np.full(3, 0.1)), p32, np.float64),
+            (x32, y32, dict(epsilon=1.0), p32.astype(np.float64), np.float64),
+            (x32, y_complex, dict(epsilon=1.0), p32.astype(np.float64), np.complex128),
+        ]
+        for y_, d_, kwargs, p, dtype in cases:
+            for neighbors in [None, 2]:
+                rbf_jax = RBFInterpolator(
+                    y_, d_, kernel="gaussian", neighbors=neighbors, **kwargs
+                )
+                assert_equal(rbf_jax(p).dtype, np.dtype(dtype))
+
+    @pytest.mark.parametrize(
+        "kernel, epsilon",
+        [
+            ("linear", None),
+            ("thin_plate_spline", None),
+            ("cubic", None),
+            ("quintic", None),
+            ("multiquadric", 1.0),
+            ("inverse_multiquadric", 1.0),
+            ("inverse_quadratic", 1.0),
+            ("gaussian", 1.0),
+        ],
+    )
+    def test_gradients(self, kernel, epsilon):
+        """Test that gradients are finite, including at data points, and correct."""
+        y = jnp.linspace(0.0, 2.0, 6)[:, None]
+        d = jnp.sin(y[:, 0])
+        rbf = RBFInterpolator(y, d, kernel=kernel, epsilon=epsilon)
+
+        def f(p):
+            return rbf(p[None, :])[0]
+
+        h = 1e-6
+
+        # evaluation point coinciding with a data point, where r = 0. For the linear
+        # kernel the interpolant has a kink here, and the gradient should match the
+        # symmetric (central difference) derivative.
+        p0 = y[2]
+        assert_(jnp.all(jnp.isfinite(jax.jacfwd(f)(p0))))
+        assert_(jnp.all(jnp.isfinite(jax.jacrev(f)(p0))))
+        fd0 = (f(p0 + h) - f(p0 - h)) / (2 * h)
+        assert_allclose(jax.grad(f)(p0), fd0, rtol=1e-6, atol=1e-8)
+
+        # derivatives through the solve, whose matrix always contains r = 0
+        p1 = jnp.array([0.3])
+
+        def g(yy, dd):
+            interp = RBFInterpolator(yy, dd, kernel=kernel, epsilon=epsilon)
+            return interp(p1[None, :])[0]
+
+        dy, dd = jax.grad(g, argnums=(0, 1))(y, d)
+        assert_(jnp.all(jnp.isfinite(dy)))
+        assert_(jnp.all(jnp.isfinite(dd)))
+
+        fd = (f(p1 + h) - f(p1 - h)) / (2 * h)
+        assert_allclose(jax.grad(f)(p1), fd, rtol=1e-6, atol=1e-8)
+        fd_y = (g(y.at[1, 0].add(h), d) - g(y.at[1, 0].add(-h), d)) / (2 * h)
+        assert_allclose(dy[1, 0], fd_y, rtol=1e-5, atol=1e-7)
+
+    def test_incorrect_inputs(self):
+        """Test error handling for incorrect inputs."""
+        x, y = self._make_test_data_1d()
+
+        # Test invalid kernel
+        with assert_raises(ValueError):
+            RBFInterpolator(x, y, kernel="invalid_kernel")
+
+        # Test invalid degree
+        with assert_raises(ValueError):
+            RBFInterpolator(x, y, degree=-2)
+
+        # Test epsilon required for certain kernels
+        with assert_raises(ValueError):
+            RBFInterpolator(x, y, kernel="multiquadric")  # No epsilon provided
+
+        # Test invalid smoothing shape
+        with assert_raises(ValueError):
+            RBFInterpolator(x, y, smoothing=np.ones(len(x) + 1))
+
+        with pytest.raises(ValueError, match="`y` must be a 2-dimensional array"):
+            RBFInterpolator(x.ravel(), y)
+
+        with pytest.raises(ValueError, match="first axis of `d` to have length"):
+            RBFInterpolator(x, y[:-1])
+
+        with pytest.raises(ValueError, match="`epsilon` must be a scalar"):
+            RBFInterpolator(x, y, epsilon=jnp.array([1.0, 2.0]))
+
+        # A quadratic polynomial in 1D needs three observations.
+        with pytest.raises(ValueError, match="At least 3 data points are required"):
+            RBFInterpolator(x[:2], y[:2], degree=2)
+
+    def test_incorrect_evaluation_inputs(self):
+        """Reject evaluation points with the wrong number of axes or dimensions."""
+        x, y = self._make_test_data_1d()
+        rbf = RBFInterpolator(x, y)
+
+        with pytest.raises(ValueError, match="`x` must be a 2-dimensional array"):
+            rbf(np.array([0.5]))
+
+        with pytest.raises(ValueError, match="second axis of `x` to have length 1"):
+            rbf(np.array([[0.5, 0.5]]))
+
+    def test_single_point(self):
+        """Test with single data point (degenerate case)."""
+        x = np.array([[0.5]])
+        y = np.array([2.0])
+
+        rbf_jax = RBFInterpolator(x, y, kernel="linear")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(x, y, kernel="linear")
+
+        x_test = np.array([[0.5], [0.3], [0.7]])
+
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_two_points(self):
+        """Test with minimal two-point setup."""
+        x = np.array([[0], [1]])
+        y = np.array([0, 2])
+
+        rbf_jax = RBFInterpolator(x, y, kernel="linear")
+        rbf_scipy = scipy.interpolate.RBFInterpolator(x, y, kernel="linear")
+
+        x_test = np.linspace(0, 1, 11)[:, None]
+
+        y_jax = rbf_jax(x_test)
+        y_scipy = rbf_scipy(x_test)
+
+        assert_allclose(y_jax, y_scipy, rtol=1e-10, atol=1e-10)
+
+    def test_neighbors_basic(self):
+        """Test neighbors functionality against SciPy."""
+        points, values = self._make_test_data_2d()
+
+        rbf_jax = RBFInterpolator(
+            points, values, kernel="thin_plate_spline", neighbors=10
+        )
+        rbf_scipy = scipy.interpolate.RBFInterpolator(
+            points, values, kernel="thin_plate_spline", neighbors=10
+        )
+
+        points_test = np.array([[0.25, 0.75], [0.6, 0.4]])
+
+        values_jax = rbf_jax(points_test)
+        values_scipy = rbf_scipy(points_test)
+
+        # Should be very close to SciPy
+        assert_allclose(values_jax, values_scipy, rtol=1e-8, atol=1e-8)
+
+    def test_neighbors_one(self):
+        """Test single-neighbor mode against SciPy."""
+        x, y = self._make_test_data_1d()
+
+        rbf_jax = RBFInterpolator(x, y, kernel="linear", neighbors=1)
+        rbf_scipy = scipy.interpolate.RBFInterpolator(
+            x, y, kernel="linear", neighbors=1
+        )
+
+        # Avoid midpoints between data points where jaxkd and scipy may
+        # break ties between equidistant neighbors differently.
+        x_test = np.array([[0.1], [0.35], [0.62], [0.9]])
+
+        values_jax = rbf_jax(x_test)
+        values_scipy = rbf_scipy(x_test)
+
+        assert_allclose(values_jax, values_scipy, rtol=1e-8, atol=1e-8)
