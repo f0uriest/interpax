@@ -1,6 +1,7 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
-from collections import OrderedDict
+import functools
+import itertools
 from typing import Any
 
 import equinox as eqx
@@ -76,6 +77,14 @@ class Interpolator1D(AbstractInterpolator):
     period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
+    even_spacing : bool, None
+        Whether x is evenly spaced, which allows a faster lookup of the interval
+        containing each query point. If None, this is checked once at construction,
+        or on each call if constructed inside a jitted function. True skips the check,
+        and gives incorrect results if x is not evenly spaced. False always uses a
+        binary search. Defaults to None. If periodic, even spacing requires x to cover
+        one full period without the endpoint, e.g.
+        ``np.linspace(0, period, N, endpoint=False)``.
     fx : ndarray, optional
         first derivatives of f with respect to x at the knots. For cubic methods, if
         given these are used in place of the derivatives approximated by ``method``.
@@ -93,6 +102,7 @@ class Interpolator1D(AbstractInterpolator):
     extrap: bool | float | tuple
     period: None | float
     axis: int | tuple[int, ...] = eqx.field(static=True)
+    even_spacing: bool | None = eqx.field(static=True)
 
     def __init__(
         self,
@@ -101,6 +111,7 @@ class Interpolator1D(AbstractInterpolator):
         method: str = "cubic",
         extrap: bool | float | tuple = False,
         period: None | float = None,
+        even_spacing: bool | None = None,
         **kwargs,
     ) -> None:
         x, f = map(asarray_inexact, (x, f))
@@ -120,6 +131,7 @@ class Interpolator1D(AbstractInterpolator):
         self.method = method
         self.extrap = extrap
         self.period = period  # pyright: ignore
+        (self.even_spacing,) = _detect_even_spacing(even_spacing, (x,), (period,))
 
         if fx is None:
             fx = _approx_df(x, f, method, axis, period, **kwargs)
@@ -151,6 +163,7 @@ class Interpolator1D(AbstractInterpolator):
             dx,
             self.extrap,
             self.period,
+            self.even_spacing,
             axis=self.axis,
             **self.derivs,
         )
@@ -192,6 +205,15 @@ class Interpolator2D(AbstractInterpolator):
         periodicity of the function in x, y directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked
+        once at construction, or on each call if constructed inside a jitted
+        function. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to None. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fxy : ndarray, optional
         derivatives df/dx, df/dy, d2f/dxdy at the knots. For cubic methods, any that
         are given are used in place of the derivatives approximated by ``method``.
@@ -205,11 +227,12 @@ class Interpolator2D(AbstractInterpolator):
     x: Float[Array, " Nx"]
     y: Float[Array, " Ny"]
     f: Inexact[Array, " Nx Ny ..."]
-    derivs: dict
+    _fstack: Inexact[Array, " Nx Ny 4 ..."]
     method: str = eqx.field(static=True)
     extrap: bool | float | tuple
     period: None | float | tuple
     axis: int | tuple[int, ...] = eqx.field(static=True)
+    even_spacing: bool | None | tuple = eqx.field(static=True)
 
     def __init__(
         self,
@@ -219,13 +242,12 @@ class Interpolator2D(AbstractInterpolator):
         method: str = "cubic",
         extrap: bool | float | tuple = False,
         period: None | float | tuple = None,
+        even_spacing: bool | None | tuple = None,
         **kwargs,
     ):
         x, y, f = map(asarray_inexact, (x, y, f))
         axis = _parse_axis(kwargs.pop("axis", None), 2, f.ndim)
-        fx = kwargs.pop("fx", None)
-        fy = kwargs.pop("fy", None)
-        fxy = kwargs.pop("fxy", None)
+        derivs = {name: kwargs.pop(name, None) for name in _field_names(2)[1:]}
 
         errorif(
             (len(x) != f.shape[axis[0]]) or (x.ndim != 1),
@@ -247,15 +269,25 @@ class Interpolator2D(AbstractInterpolator):
         self.extrap = extrap
         self.period = period
         periodx, periody = _parse_ndarg(period, 2)
+        self.even_spacing = _detect_even_spacing(
+            even_spacing, (x, y), (periodx, periody)
+        )
 
-        if fx is None:
-            fx = _approx_df(x, f, method, axis[0], periodx, **kwargs)
-        if fy is None:
-            fy = _approx_df(y, f, method, axis[1], periody, **kwargs)
-        if fxy is None:
-            fxy = _approx_df(y, fx, method, axis[1], periody, **kwargs)
+        self._fstack = _stack_fields(
+            jnp.moveaxis(f, axis, tuple(range(len(axis)))),
+            *_move_grid_axes(tuple(derivs.values()), axis),
+            grids=(x, y),
+            method=method,
+            periods=(periodx, periody),
+            **kwargs,
+        )
 
-        self.derivs = {"fx": fx, "fy": fy, "fxy": fxy}
+    # equinox allows a property to implement an AbstractVar, which pyright doesn't model
+    @property
+    def derivs(self) -> dict[str, Inexact[Array, "..."]]:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """dict: Derivatives of f at the knots, keyed by ``fx``, ``fy``, ``fxy``."""
+        assert isinstance(self.axis, tuple)
+        return _unstack_fields(self._fstack, self.axis)
 
     def __call__(
         self,
@@ -288,9 +320,14 @@ class Interpolator2D(AbstractInterpolator):
             (dx, dy),
             self.extrap,
             self.period,
+            self.even_spacing,
             axis=self.axis,
-            **self.derivs,
+            **self._fstack_kwargs(),
         )
+
+    def _fstack_kwargs(self) -> dict:
+        # only cubic methods use the derivatives
+        return {"_fstack": self._fstack} if self.method in CUBIC_METHODS else {}
 
 
 class Interpolator3D(AbstractInterpolator):
@@ -331,6 +368,15 @@ class Interpolator3D(AbstractInterpolator):
         periodicity of the function in x, y, z directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked
+        once at construction, or on each call if constructed inside a jitted
+        function. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to None. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fz, fxy, fxz, fyz, fxyz : ndarray, optional
         derivatives df/dx, df/dy, df/dz, d2f/dxdy, d2f/dxdz, d2f/dydz, d3f/dxdydz at
         the knots. For cubic methods, any that are given are used in place of the
@@ -346,11 +392,12 @@ class Interpolator3D(AbstractInterpolator):
     y: Float[Array, " Ny"]
     z: Float[Array, " Nz"]
     f: Inexact[Array, " Nx Ny Nz ..."]
-    derivs: dict
+    _fstack: Inexact[Array, " Nx Ny Nz 8 ..."]
     method: str = eqx.field(static=True)
     extrap: bool | float | tuple
     period: None | float | tuple
     axis: int | tuple[int, ...] = eqx.field(static=True)
+    even_spacing: bool | None | tuple = eqx.field(static=True)
 
     def __init__(
         self,
@@ -361,6 +408,7 @@ class Interpolator3D(AbstractInterpolator):
         method: str = "cubic",
         extrap: bool | float | tuple = False,
         period: None | float | tuple = None,
+        even_spacing: bool | None | tuple = None,
         **kwargs,
     ):
         x, y, z, f = map(asarray_inexact, (x, y, z, f))
@@ -383,13 +431,7 @@ class Interpolator3D(AbstractInterpolator):
         )
         errorif(method not in METHODS, ValueError, f"unknown method {method}")
 
-        fx = kwargs.pop("fx", None)
-        fy = kwargs.pop("fy", None)
-        fz = kwargs.pop("fz", None)
-        fxy = kwargs.pop("fxy", None)
-        fxz = kwargs.pop("fxz", None)
-        fyz = kwargs.pop("fyz", None)
-        fxyz = kwargs.pop("fxyz", None)
+        derivs = {name: kwargs.pop(name, None) for name in _field_names(3)[1:]}
 
         self.x = x
         self.y = y
@@ -400,31 +442,29 @@ class Interpolator3D(AbstractInterpolator):
         self.extrap = extrap
         self.period = period
         periodx, periody, periodz = _parse_ndarg(period, 3)
+        self.even_spacing = _detect_even_spacing(
+            even_spacing, (x, y, z), (periodx, periody, periodz)
+        )
 
-        if fx is None:
-            fx = _approx_df(x, f, method, axis[0], periodx, **kwargs)
-        if fy is None:
-            fy = _approx_df(y, f, method, axis[1], periody, **kwargs)
-        if fz is None:
-            fz = _approx_df(z, f, method, axis[2], periodz, **kwargs)
-        if fxy is None:
-            fxy = _approx_df(y, fx, method, axis[1], periody, **kwargs)
-        if fxz is None:
-            fxz = _approx_df(z, fx, method, axis[2], periodz, **kwargs)
-        if fyz is None:
-            fyz = _approx_df(z, fy, method, axis[2], periodz, **kwargs)
-        if fxyz is None:
-            fxyz = _approx_df(z, fxy, method, axis[2], periodz, **kwargs)
+        self._fstack = _stack_fields(
+            jnp.moveaxis(f, axis, tuple(range(len(axis)))),
+            *_move_grid_axes(tuple(derivs.values()), axis),
+            grids=(x, y, z),
+            method=method,
+            periods=(periodx, periody, periodz),
+            **kwargs,
+        )
 
-        self.derivs = {
-            "fx": fx,
-            "fy": fy,
-            "fz": fz,
-            "fxy": fxy,
-            "fxz": fxz,
-            "fyz": fyz,
-            "fxyz": fxyz,
-        }
+    # equinox allows a property to implement an AbstractVar, which pyright doesn't model
+    @property
+    def derivs(self) -> dict[str, Inexact[Array, "..."]]:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """dict: Derivatives of f at the knots, keyed by ``fx``, ``fy``, etc."""
+        assert isinstance(self.axis, tuple)
+        return _unstack_fields(self._fstack, self.axis)
+
+    def _fstack_kwargs(self) -> dict:
+        # only cubic methods use the derivatives
+        return {"_fstack": self._fstack} if self.method in CUBIC_METHODS else {}
 
     def __call__(
         self,
@@ -461,12 +501,13 @@ class Interpolator3D(AbstractInterpolator):
             (dx, dy, dz),
             self.extrap,
             self.period,
+            self.even_spacing,
             axis=self.axis,
-            **self.derivs,
+            **self._fstack_kwargs(),
         )
 
 
-@wrap_jit(static_argnames=["method", "axis"])
+@wrap_jit(static_argnames=["method", "axis", "even_spacing"])
 def interp1d(
     xq: Real[ArrayLike, " Nq"],
     x: Real[ArrayLike, " Nx"],
@@ -475,6 +516,7 @@ def interp1d(
     derivative: int = 0,
     extrap: bool | float | tuple = False,
     period: None | float = None,
+    even_spacing: bool | None = False,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 1d function.
@@ -513,6 +555,13 @@ def interp1d(
     period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
+    even_spacing : bool, None
+        Whether x is evenly spaced, which allows a faster lookup of the interval
+        containing each query point. If None, this is checked on each call. True skips
+        the check, and gives incorrect results if x is not evenly spaced. False always
+        uses a binary search. Defaults to False. If periodic, even spacing requires x to
+        cover one full period without the endpoint, e.g.
+        ``np.linspace(0, period, N, endpoint=False)``.
     fx : ndarray, optional
         first derivatives of f with respect to x at the knots. For cubic methods, if
         given these are used in place of the derivatives approximated by ``method``.
@@ -566,11 +615,13 @@ def interp1d(
         xq, x, f, fx = _make_periodic(xq, x, period, 0, f, fx)
         lowx = highx = True
 
+    i = _find_cell(x, xq, even_spacing)
+
     if method == "nearest":
 
         def derivative0_nearest():
-            i = jnp.argmin(jnp.abs(xq[:, np.newaxis] - x[np.newaxis]), axis=1)
-            return f[i]
+            x0, x1 = x[i - 1], x[i]
+            return f[jnp.where(xq - x0 <= x1 - xq, i - 1, i)]
 
         def derivative1_nearest():
             return jnp.zeros((xq.size, *f.shape[1:]), dtype=f.dtype)
@@ -580,22 +631,24 @@ def interp1d(
     elif method == "linear":
 
         def derivative0_linear():
-            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-            df = f[i] - f[i - 1]
-            dx = x[i] - x[i - 1]
+            f0, f1 = f[i - 1], f[i]
+            x0, x1 = x[i - 1], x[i]
+            df = f1 - f0
+            dx = x1 - x0
             dxi = jnp.where(dx == 0, 0, 1 / dx)
-            delta = xq - x[i - 1]
+            delta = xq - x0
             fq = jnp.where(
                 (dx == 0),
-                f[i].T,
-                f[i - 1].T + (delta * dxi * df.T),
+                f1.T,
+                f0.T + (delta * dxi * df.T),
             ).T
             return fq
 
         def derivative1_linear():
-            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-            df = f[i] - f[i - 1]
-            dx = x[i] - x[i - 1]
+            f0, f1 = f[i - 1], f[i]
+            x0, x1 = x[i - 1], x[i]
+            df = f1 - f0
+            dx = x1 - x0
             dxi = jnp.where(dx == 0, 0, 1 / dx)
             return (df.T * dxi).T
 
@@ -608,21 +661,23 @@ def interp1d(
 
     else:
         assert method in CUBIC_METHODS
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
         assert fx is not None and fx.shape == f.shape
 
-        dx = x[i] - x[i - 1]
-        delta = xq - x[i - 1]
+        x0, x1 = x[i - 1], x[i]
+        dx = x1 - x0
+        delta = xq - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         t = delta * dxi
 
-        f0 = f[i - 1]
-        f1 = f[i]
-        fx0 = (fx[i - 1].T * dx).T
-        fx1 = (fx[i].T * dx).T
+        f0, f1 = f[i - 1], f[i]
+        fx0, fx1 = fx[i - 1], fx[i]
+        fx0 = (fx0.T * dx).T
+        fx1 = (fx1.T * dx).T
 
         F = jnp.stack([f0, f1, fx0, fx1], axis=0).T
-        coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F).T
+        # full precision, as the default for float32 on some GPUs keeps only ~10 bits
+        matmul = functools.partial(jnp.matmul, precision=jax.lax.Precision.HIGHEST)
+        coef = jnp.vectorize(matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F).T
         ttx = _get_t_der(t, derivative, dxi)
         fq = jnp.einsum("ji...,ij->i...", coef, ttx)
 
@@ -630,7 +685,7 @@ def interp1d(
     return _move_query_axes(fq.reshape(outshape), nq, axis)
 
 
-@wrap_jit(static_argnames=["method", "axis"])
+@wrap_jit(static_argnames=["method", "axis", "even_spacing"])
 def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq: Real[ArrayLike, " Nq"],
     yq: Real[ArrayLike, " Nq"],
@@ -641,6 +696,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     derivative: int | tuple = 0,
     extrap: bool | float | tuple = False,
     period: None | float | tuple = None,
+    even_spacing: bool | None | tuple = False,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 2d function.
@@ -685,6 +741,14 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         periodicity of the function in x, y directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in both directions.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked on
+        each call. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to False. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fxy : ndarray, optional
         derivatives df/dx, df/dy, d2f/dxdy at the knots. For cubic methods, any that
         are given are used in place of the derivatives approximated by ``method``.
@@ -711,18 +775,12 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     f = f.astype(jnp.result_type(f, x))
 
     axis = _parse_axis(kwargs.pop("axis", None), 2, f.ndim)
-    fx = kwargs.pop("fx", None)
-    fy = kwargs.pop("fy", None)
-    fxy = kwargs.pop("fxy", None)
+    derivs = {name: kwargs.pop(name, None) for name in _field_names(2)[1:]}
+    # f and its derivatives stacked as by _stack_fields, as precomputed by
+    # Interpolator2D
+    fstack = kwargs.pop("_fstack", None)
     # interpolate along the leading axes, then move the query axes into place
-    dest = (0, 1)
-    f = jnp.moveaxis(f, axis, dest)
-    if fx is not None:
-        fx = jnp.moveaxis(fx, axis, dest)
-    if fy is not None:
-        fy = jnp.moveaxis(fy, axis, dest)
-    if fxy is not None:
-        fxy = jnp.moveaxis(fxy, axis, dest)
+    f = jnp.moveaxis(f, axis, tuple(range(len(axis))))
     xq, yq = jnp.broadcast_arrays(xq, yq)
     outshape = xq.shape + f.shape[2:]
     nq = xq.ndim
@@ -748,20 +806,28 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     derivative_x, derivative_y = _parse_ndarg(derivative, 2)
     lowx, highx, lowy, highy = _parse_extrap(extrap, 2)
 
-    if method in CUBIC_METHODS:
-        if fx is None:
-            fx = _approx_df(x, f, method, 0, periodx, **kwargs)
-        if fy is None:
-            fy = _approx_df(y, f, method, 1, periody, **kwargs)
-        if fxy is None:
-            fxy = _approx_df(y, fx, method, 1, periody, **kwargs)
+    if method in CUBIC_METHODS and fstack is None:
+        fstack = _stack_fields(
+            f,
+            *_move_grid_axes(tuple(derivs.values()), axis),
+            grids=(x, y),
+            method=method,
+            periods=(periodx, periody),
+            **kwargs,
+        )
+    # the values the method reads: the stack for cubic methods, otherwise just f
+    data = fstack if method in CUBIC_METHODS else f
 
     if periodx is not None:
-        xq, x, f, fx, fy, fxy = _make_periodic(xq, x, periodx, 0, f, fx, fy, fxy)
+        xq, x, data = _make_periodic(xq, x, periodx, 0, data)
         lowx = highx = True
     if periody is not None:
-        yq, y, f, fx, fy, fxy = _make_periodic(yq, y, periody, 1, f, fx, fy, fxy)
+        yq, y, data = _make_periodic(yq, y, periody, 1, data)
         lowy = highy = True
+
+    evenx, eveny = _parse_ndarg(even_spacing, 2)
+    i = _find_cell(x, xq, evenx)
+    j = _find_cell(y, yq, eveny)
 
     if method == "nearest":
 
@@ -769,14 +835,11 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
             # because of the regular spaced grid we know that the nearest point
             # will be one of the 4 neighbors on the grid, so we first find those
             # and then take the nearest one among them.
-            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-            j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
-            neighbors_x = jnp.array(
-                [[x[i], x[i - 1], x[i], x[i - 1]], [y[j], y[j], y[j - 1], y[j - 1]]]
-            )
-            neighbors_f = jnp.array(
-                [f[i, j].T, f[i - 1, j].T, f[i, j - 1].T, f[i - 1, j - 1].T]
-            )
+            x0, x1 = x[i - 1], x[i]
+            y0, y1 = y[j - 1], y[j]
+            F = _take_neighbor_data(data, i, j)
+            neighbors_x = jnp.array([[x1, x0, x1, x0], [y1, y1, y0, y0]])
+            neighbors_f = jnp.array([F[1, 1].T, F[0, 1].T, F[1, 0].T, F[0, 0].T])
             xyq = jnp.array([xq, yq])
             dist = jnp.linalg.norm(neighbors_x - xyq[:, None, :], axis=0)
             idx = jnp.argmin(dist, axis=0)
@@ -790,17 +853,9 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-        j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
-
-        f00 = f[i - 1, j - 1]
-        f01 = f[i - 1, j]
-        f10 = f[i, j - 1]
-        f11 = f[i, j]
-        x0 = x[i - 1]
-        x1 = x[i]
-        y0 = y[j - 1]
-        y1 = y[j]
+        F = _take_neighbor_data(data, i, j)
+        x0, x1 = x[i - 1], x[i]
+        y0, y1 = y[j - 1], y[j]
         dx = x1 - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         dy = y1 - y0
@@ -815,45 +870,22 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
         tx = jax.lax.switch(derivative_x, [dx0, dx1, dx2])
         ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
-        F = jnp.array([[f00, f01], [f10, f11]])
         fq = (dxi * dyi * jnp.einsum("ijk...,ik,jk->k...", F, tx, ty).T).T
 
     else:
         assert method in CUBIC_METHODS
-        assert fx is not None and fy is not None and fxy is not None
-        assert fx.shape == fy.shape == fxy.shape == f.shape
-
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-        j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
-
-        dx = x[i] - x[i - 1]
-        deltax = xq - x[i - 1]
+        x0, x1 = x[i - 1], x[i]
+        y0, y1 = y[j - 1], y[j]
+        dx = x1 - x0
+        deltax = xq - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         tx = deltax * dxi
-        dy = y[j] - y[j - 1]
-        deltay = yq - y[j - 1]
+        dy = y1 - y0
+        deltay = yq - y0
         dyi = jnp.where(dy == 0, 0, 1 / dy)
         ty = deltay * dyi
 
-        fs = OrderedDict()
-        fs["f"] = f
-        fs["fx"] = fx
-        fs["fy"] = fy
-        fs["fxy"] = fxy
-        fsq = OrderedDict()
-        for ff in fs.keys():
-            for jj in [0, 1]:
-                for ii in [0, 1]:
-                    s = ff + str(ii) + str(jj)
-                    fsq[s] = fs[ff][i - 1 + ii, j - 1 + jj]
-                    if "x" in ff:
-                        fsq[s] = (dx * fsq[s].T).T
-                    if "y" in ff:
-                        fsq[s] = (dy * fsq[s].T).T
-
-        F = jnp.stack([foo for foo in fsq.values()], axis=0).T
-        coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_BICUBIC, F).T
-        coef = jnp.moveaxis(coef.reshape((4, 4, *coef.shape[1:]), order="F"), 2, 0)
+        coef = _cell_coefficients(_take_neighbor_data(data, i, j), (dx, dy), A_BICUBIC)
         ttx = _get_t_der(tx, derivative_x, dxi)
         tty = _get_t_der(ty, derivative_y, dyi)
         fq = jnp.einsum("ijk...,ij,ik->i...", coef, ttx, tty)
@@ -864,7 +896,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     return _move_query_axes(fq.reshape(outshape), nq, axis)
 
 
-@wrap_jit(static_argnames=["method", "axis"])
+@wrap_jit(static_argnames=["method", "axis", "even_spacing"])
 def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     xq: Real[ArrayLike, " Nq"],
     yq: Real[ArrayLike, " Nq"],
@@ -877,6 +909,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     derivative: int | tuple = 0,
     extrap: bool | float | tuple = False,
     period: None | float | tuple = None,
+    even_spacing: bool | None | tuple = False,
     **kwargs,
 ) -> Inexact[Array, "Nq ..."]:
     """Interpolate a 3d function.
@@ -925,6 +958,14 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         periodicity of the function in x, y, z directions. None denotes no periodicity,
         otherwise function is assumed to be periodic on the interval [0,period]. Use a
         single value for the same in all directions.
+    even_spacing : bool, None, tuple
+        Whether the knots along each axis are evenly spaced, which allows a faster
+        lookup of the cell containing each query point. If None, this is checked on
+        each call. True skips the check, and gives incorrect results if the knots are
+        not evenly spaced. False always uses a binary search. Defaults to False. Use a
+        single value for the same in all directions. Along periodic axes, even
+        spacing requires the knots to cover one full period without the endpoint,
+        e.g. ``np.linspace(0, period, N, endpoint=False)``.
     fx, fy, fz, fxy, fxz, fyz, fxyz : ndarray, optional
         derivatives df/dx, df/dy, df/dz, d2f/dxdy, d2f/dxdz, d2f/dydz, d3f/dxdydz at
         the knots. For cubic methods, any that are given are used in place of the
@@ -952,30 +993,12 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     f = f.astype(jnp.result_type(f, x))
 
     axis = _parse_axis(kwargs.pop("axis", None), 3, f.ndim)
-    fx = kwargs.pop("fx", None)
-    fy = kwargs.pop("fy", None)
-    fz = kwargs.pop("fz", None)
-    fxy = kwargs.pop("fxy", None)
-    fxz = kwargs.pop("fxz", None)
-    fyz = kwargs.pop("fyz", None)
-    fxyz = kwargs.pop("fxyz", None)
+    derivs = {name: kwargs.pop(name, None) for name in _field_names(3)[1:]}
+    # f and its derivatives stacked as by _stack_fields, as precomputed by
+    # Interpolator3D
+    fstack = kwargs.pop("_fstack", None)
     # interpolate along the leading axes, then move the query axes into place
-    dest = (0, 1, 2)
-    f = jnp.moveaxis(f, axis, dest)
-    if fx is not None:
-        fx = jnp.moveaxis(fx, axis, dest)
-    if fy is not None:
-        fy = jnp.moveaxis(fy, axis, dest)
-    if fz is not None:
-        fz = jnp.moveaxis(fz, axis, dest)
-    if fxy is not None:
-        fxy = jnp.moveaxis(fxy, axis, dest)
-    if fxz is not None:
-        fxz = jnp.moveaxis(fxz, axis, dest)
-    if fyz is not None:
-        fyz = jnp.moveaxis(fyz, axis, dest)
-    if fxyz is not None:
-        fxyz = jnp.moveaxis(fxyz, axis, dest)
+    f = jnp.moveaxis(f, axis, tuple(range(len(axis))))
 
     errorif(
         (len(x) != f.shape[0]) or (x.ndim != 1),
@@ -1007,37 +1030,32 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     derivative_x, derivative_y, derivative_z = _parse_ndarg(derivative, 3)
     lowx, highx, lowy, highy, lowz, highz = _parse_extrap(extrap, 3)
 
-    if method in CUBIC_METHODS:
-        if fx is None:
-            fx = _approx_df(x, f, method, 0, periodx, **kwargs)
-        if fy is None:
-            fy = _approx_df(y, f, method, 1, periody, **kwargs)
-        if fz is None:
-            fz = _approx_df(z, f, method, 2, periodz, **kwargs)
-        if fxy is None:
-            fxy = _approx_df(y, fx, method, 1, periody, **kwargs)
-        if fxz is None:
-            fxz = _approx_df(z, fx, method, 2, periodz, **kwargs)
-        if fyz is None:
-            fyz = _approx_df(z, fy, method, 2, periodz, **kwargs)
-        if fxyz is None:
-            fxyz = _approx_df(z, fxy, method, 2, periodz, **kwargs)
+    if method in CUBIC_METHODS and fstack is None:
+        fstack = _stack_fields(
+            f,
+            *_move_grid_axes(tuple(derivs.values()), axis),
+            grids=(x, y, z),
+            method=method,
+            periods=(periodx, periody, periodz),
+            **kwargs,
+        )
+    # the values the method reads: the stack for cubic methods, otherwise just f
+    data = fstack if method in CUBIC_METHODS else f
 
     if periodx is not None:
-        xq, x, f, fx, fy, fz, fxy, fxz, fyz, fxyz = _make_periodic(
-            xq, x, periodx, 0, f, fx, fy, fz, fxy, fxz, fyz, fxyz
-        )
+        xq, x, data = _make_periodic(xq, x, periodx, 0, data)
         lowx = highx = True
     if periody is not None:
-        yq, y, f, fx, fy, fz, fxy, fxz, fyz, fxyz = _make_periodic(
-            yq, y, periody, 1, f, fx, fy, fz, fxy, fxz, fyz, fxyz
-        )
+        yq, y, data = _make_periodic(yq, y, periody, 1, data)
         lowy = highy = True
     if periodz is not None:
-        zq, z, f, fx, fy, fz, fxy, fxz, fyz, fxyz = _make_periodic(
-            zq, z, periodz, 2, f, fx, fy, fz, fxy, fxz, fyz, fxyz
-        )
+        zq, z, data = _make_periodic(zq, z, periodz, 2, data)
         lowz = highz = True
+
+    evenx, eveny, evenz = _parse_ndarg(even_spacing, 3)
+    i = _find_cell(x, xq, evenx)
+    j = _find_cell(y, yq, eveny)
+    k = _find_cell(z, zq, evenz)
 
     if method == "nearest":
 
@@ -1045,26 +1063,27 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
             # because of the regular spaced grid we know that the nearest point
             # will be one of the 8 neighbors on the grid, so we first find those
             # and then take the nearest one among them.
-            i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-            j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
-            k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
+            x0, x1 = x[i - 1], x[i]
+            y0, y1 = y[j - 1], y[j]
+            z0, z1 = z[k - 1], z[k]
+            F = _take_neighbor_data(data, i, j, k)
             neighbors_x = jnp.array(
                 [
-                    [x[i], x[i - 1], x[i], x[i - 1], x[i], x[i - 1], x[i], x[i - 1]],
-                    [y[j], y[j], y[j - 1], y[j - 1], y[j], y[j], y[j - 1], y[j - 1]],
-                    [z[k], z[k], z[k], z[k], z[k - 1], z[k - 1], z[k - 1], z[k - 1]],
+                    [x1, x0, x1, x0, x1, x0, x1, x0],
+                    [y1, y1, y0, y0, y1, y1, y0, y0],
+                    [z1, z1, z1, z1, z0, z0, z0, z0],
                 ]
             )
             neighbors_f = jnp.array(
                 [
-                    f[i, j, k].T,
-                    f[i - 1, j, k].T,
-                    f[i, j - 1, k].T,
-                    f[i - 1, j - 1, k].T,
-                    f[i, j, k - 1].T,
-                    f[i - 1, j, k - 1].T,
-                    f[i, j - 1, k - 1].T,
-                    f[i - 1, j - 1, k - 1].T,
+                    F[1, 1, 1].T,
+                    F[0, 1, 1].T,
+                    F[1, 0, 1].T,
+                    F[0, 0, 1].T,
+                    F[1, 1, 0].T,
+                    F[0, 1, 0].T,
+                    F[1, 0, 0].T,
+                    F[0, 0, 0].T,
                 ]
             )
             xyzq = jnp.array([xq, yq, zq])
@@ -1082,24 +1101,10 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         )
 
     elif method == "linear":
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-        j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
-        k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
-
-        f000 = f[i - 1, j - 1, k - 1]
-        f001 = f[i - 1, j - 1, k]
-        f010 = f[i - 1, j, k - 1]
-        f100 = f[i, j - 1, k - 1]
-        f110 = f[i, j, k - 1]
-        f011 = f[i - 1, j, k]
-        f101 = f[i, j - 1, k]
-        f111 = f[i, j, k]
-        x0 = x[i - 1]
-        x1 = x[i]
-        y0 = y[j - 1]
-        y1 = y[j]
-        z0 = z[k - 1]
-        z1 = z[k]
+        F = _take_neighbor_data(data, i, j, k)
+        x0, x1 = x[i - 1], x[i]
+        y0, y1 = y[j - 1], y[j]
+        z0, z1 = z[k - 1], z[k]
         dx = x1 - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         dy = y1 - y0
@@ -1121,75 +1126,32 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         ty = jax.lax.switch(derivative_y, [dy0, dy1, dy2])
         tz = jax.lax.switch(derivative_z, [dz0, dz1, dz2])
 
-        F = jnp.array([[[f000, f001], [f010, f011]], [[f100, f101], [f110, f111]]])
         fq = (dxi * dyi * dzi * jnp.einsum("lijk...,lk,ik,jk->k...", F, tx, ty, tz).T).T
 
     else:
         assert method in CUBIC_METHODS
-        assert (
-            fx is not None
-            and fy is not None
-            and fz is not None
-            and fxy is not None
-            and fxz is not None
-            and fyz is not None
-            and fxyz is not None
-        )
-        assert (
-            fx.shape
-            == fy.shape
-            == fz.shape
-            == fxy.shape
-            == fxz.shape
-            == fyz.shape
-            == fxyz.shape
-            == f.shape
-        )
-        i = jnp.clip(jnp.searchsorted(x, xq, side="right"), 1, len(x) - 1)
-        j = jnp.clip(jnp.searchsorted(y, yq, side="right"), 1, len(y) - 1)
-        k = jnp.clip(jnp.searchsorted(z, zq, side="right"), 1, len(z) - 1)
+        x0, x1 = x[i - 1], x[i]
+        y0, y1 = y[j - 1], y[j]
+        z0, z1 = z[k - 1], z[k]
 
-        dx = x[i] - x[i - 1]
-        deltax = xq - x[i - 1]
+        dx = x1 - x0
+        deltax = xq - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         tx = deltax * dxi
 
-        dy = y[j] - y[j - 1]
-        deltay = yq - y[j - 1]
+        dy = y1 - y0
+        deltay = yq - y0
         dyi = jnp.where(dy == 0, 0, 1 / dy)
         ty = deltay * dyi
 
-        dz = z[k] - z[k - 1]
-        deltaz = zq - z[k - 1]
+        dz = z1 - z0
+        deltaz = zq - z0
         dzi = jnp.where(dz == 0, 0, 1 / dz)
         tz = deltaz * dzi
 
-        fs = OrderedDict()
-        fs["f"] = f
-        fs["fx"] = fx
-        fs["fy"] = fy
-        fs["fz"] = fz
-        fs["fxy"] = fxy
-        fs["fxz"] = fxz
-        fs["fyz"] = fyz
-        fs["fxyz"] = fxyz
-        fsq = OrderedDict()
-        for ff in fs.keys():
-            for kk in [0, 1]:
-                for jj in [0, 1]:
-                    for ii in [0, 1]:
-                        s = ff + str(ii) + str(jj) + str(kk)
-                        fsq[s] = fs[ff][i - 1 + ii, j - 1 + jj, k - 1 + kk]
-                        if "x" in ff:
-                            fsq[s] = (dx * fsq[s].T).T
-                        if "y" in ff:
-                            fsq[s] = (dy * fsq[s].T).T
-                        if "z" in ff:
-                            fsq[s] = (dz * fsq[s].T).T
-
-        F = jnp.stack([foo for foo in fsq.values()], axis=0).T
-        coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_TRICUBIC, F).T
-        coef = jnp.moveaxis(coef.reshape((4, 4, 4, *coef.shape[1:]), order="F"), 3, 0)
+        coef = _cell_coefficients(
+            _take_neighbor_data(data, i, j, k), (dx, dy, dz), A_TRICUBIC
+        )
         ttx = _get_t_der(tx, derivative_x, dxi)
         tty = _get_t_der(ty, derivative_y, dyi)
         ttz = _get_t_der(tz, derivative_z, dzi)
@@ -1227,6 +1189,249 @@ def _move_query_axes(fq: jax.Array, nq: int, axis: tuple[int, ...]) -> jax.Array
     """Move leading nq query dimensions to where the grid axes of f started."""
     start = min(axis)
     return jnp.moveaxis(fq, tuple(range(nq)), tuple(range(start, start + nq)))
+
+
+def _is_uniform(x: jax.Array) -> jax.Array:
+    """Whether the knots x are close enough to evenly spaced for a direct lookup."""
+    n = len(x)
+    dx = (x[-1] - x[0]) / (n - 1)
+    dev = jnp.max(jnp.abs(x - (x[0] + dx * jnp.arange(n, dtype=x.dtype))))
+    # every knot within a quarter spacing of the uniform grid means the direct guess
+    # is at most one cell off, even allowing for rounding in computing the guess, so
+    # a single correction step makes it exact.
+    return dev < dx / 4
+
+
+def _find_cell_uniform(x: jax.Array, xq: jax.Array) -> jax.Array:
+    n = len(x)
+    # spacing from the full extent rather than the first interval, so that rounding
+    # error in the spacing isn't amplified by the knot index.
+    dx = (x[-1] - x[0]) / (n - 1)
+    i = jnp.clip(jnp.floor((xq - x[0]) / dx).astype(int) + 1, 1, n - 1)
+    i = i + (x[i] <= xq) - (x[i - 1] > xq)
+    return jnp.clip(i, 1, n - 1)
+
+
+def _find_cell_search(x: jax.Array, xq: jax.Array) -> jax.Array:
+    # unrolling the binary search lets XLA fuse its steps, which is much faster than
+    # the default loop on accelerators.
+    i = jnp.searchsorted(x, xq, side="right", method="scan_unrolled")
+    return jnp.clip(i.astype(int), 1, len(x) - 1)
+
+
+def _find_cell(x: jax.Array, xq: jax.Array, even_spacing: bool | None) -> jax.Array:
+    """Find the index i such that x[i - 1] <= xq < x[i], clipped to [1, len(x) - 1].
+
+    Parameters
+    ----------
+    x : ndarray, shape(N,)
+        Monotonically increasing knots.
+    xq : ndarray, shape(Nq,)
+        Query points.
+    even_spacing : bool, None
+        Whether x is evenly spaced, in which case the index is computed directly
+        instead of by binary search. If None, this is checked at runtime.
+
+    Returns
+    -------
+    i : ndarray of int, shape(Nq,)
+        Index of the upper knot of the cell containing each query point.
+    """
+    if even_spacing is None:
+        return jax.lax.cond(
+            _is_uniform(x), _find_cell_uniform, _find_cell_search, x, xq
+        )
+    if even_spacing:
+        return _find_cell_uniform(x, xq)
+    return _find_cell_search(x, xq)
+
+
+def _detect_even_spacing(
+    even_spacing: bool | None | tuple, grids: tuple, periods: tuple
+) -> tuple:
+    """Resolve even_spacing per axis, checking concrete grids where it is None."""
+    out = []
+    for even, x, period in zip(_parse_ndarg(even_spacing, len(grids)), grids, periods):
+        if even is None:
+            if period is not None:
+                _, x = _make_periodic(x, x, period, 0)
+            try:
+                even = bool(_is_uniform(x))
+            except jax.errors.ConcretizationTypeError:
+                pass  # traced grid, so leave the check to each call
+        out.append(even)
+    return tuple(out)
+
+
+def _field_names(n: int) -> tuple[str, ...]:
+    """Names of f and its derivatives used for cubic interpolation in n dimensions.
+
+    These are f and every mixed first derivative, ordered by number of derivatives
+    and then by axis, e.g. f, fx, fy, fxy in 2D.
+    """
+    return tuple(
+        "f" + "".join(c)
+        for r in range(n + 1)
+        for c in itertools.combinations("xyz"[:n], r)
+    )
+
+
+def _move_grid_axes(
+    arrs: tuple[jax.Array | None, ...], axis: tuple[int, ...]
+) -> tuple[jax.Array | None, ...]:
+    """Move the grid axes of each array (skipping None) to the front."""
+    lead = tuple(range(len(axis)))
+    return tuple(None if a is None else jnp.moveaxis(a, axis, lead) for a in arrs)
+
+
+def _stack_fields(
+    f: jax.Array,
+    *derivs: jax.Array | None,
+    grids: tuple,
+    method: str,
+    periods: tuple,
+    **kwargs,
+) -> jax.Array:
+    """Stack f and its derivatives along a new axis right after the grid axes.
+
+    Parameters
+    ----------
+    f : ndarray, shape(N1, ..., Nn, ...)
+        Function values, with the grid axes leading.
+    *derivs : ndarray or None
+        Derivatives of f in the order of _field_names(n)[1:], with the grid axes
+        leading. Any that are None are approximated with ``method``.
+    grids : tuple of ndarray
+        Knots along each grid axis.
+    method : str
+        Method used to approximate missing derivatives.
+    periods : tuple of float or None
+        Period along each grid axis.
+
+    Returns
+    -------
+    fstack : ndarray, shape(N1, ..., Nn, 2**n, ...)
+        f and its derivatives, in the order of _field_names(n).
+    """
+    n = len(grids)
+    names = _field_names(n)
+    fields = {"f": f, **dict(zip(names[1:], derivs))}
+    for name in names[1:]:
+        if fields[name] is None:
+            # derivative along the last axis in the name, of the field before it
+            k = "xyz".index(name[-1])
+            fields[name] = _approx_df(
+                grids[k], fields[name[:-1]], method, k, periods[k], **kwargs
+            )
+    # with the fields interleaved, the values of every field at a cell corner are
+    # adjacent in memory, so cubic evaluation reads them with a single gather
+    return jnp.stack([fields[name] for name in names], axis=n)
+
+
+def _unstack_fields(fstack: jax.Array, axis: tuple[int, ...]) -> dict:
+    """Derivatives from _stack_fields, with the grid axes moved back to axis."""
+    n = len(axis)
+    return {
+        name: jnp.moveaxis(jnp.take(fstack, m, axis=n), tuple(range(n)), axis)
+        for m, name in enumerate(_field_names(n))
+        if m > 0
+    }
+
+
+def _cell_coefficients(
+    corners: jax.Array, widths: tuple[jax.Array, ...], A: np.ndarray
+) -> jax.Array:
+    """Coefficients of the cubic polynomial on each cell, from its corner values.
+
+    Parameters
+    ----------
+    corners : ndarray, shape(2, ..., 2, Nq, 2**n, ...)
+        Values of f and its derivatives (in the order of _field_names(n)) at each
+        cell corner, as gathered from the output of _stack_fields.
+    widths : tuple of ndarray, shape(Nq,)
+        Width of the cell along each axis.
+    A : ndarray, shape(4**n, 4**n)
+        Matrix mapping corner values to polynomial coefficients.
+
+    Returns
+    -------
+    coef : ndarray, shape(Nq, 4, ..., 4, ...)
+        Coefficient of t1**p1 * ... * tn**pn at index [:, p1, ..., pn].
+    """
+    n = len(widths)
+    nq = corners.shape[n]
+    trailing = corners.shape[n + 2 :]
+    # derivatives with respect to the normalized cell coordinates, which are scaled
+    # by the cell width along each differentiated axis
+    width = dict(zip("xyz", widths))
+
+    def field_scale(name):
+        out = jnp.ones_like(widths[0])
+        for a in name[1:]:
+            out = out * width[a]
+        return out
+
+    scale = jnp.stack([field_scale(name) for name in _field_names(n)], axis=-1)
+    corners = corners * scale.reshape(scale.shape + (1,) * len(trailing))
+    # flatten to the order A expects: field, then corner along the last axis down to
+    # the first, i.e. (Nq, field, cn, ..., c1)
+    corners = jnp.moveaxis(
+        corners, (n, n + 1, *range(n - 1, -1, -1)), tuple(range(n + 2))
+    )
+    # full precision, as the default for float32 on some GPUs keeps only ~10 bits
+    coef = jnp.einsum(
+        "ij,qj...->qi...",
+        A,
+        corners.reshape((nq, -1, *trailing)),
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    # coefficient index is p1 + 4 * p2 + ..., so reshape gives (Nq, pn, ..., p1)
+    coef = coef.reshape((nq,) + (4,) * n + trailing)
+    return jnp.moveaxis(coef, tuple(range(1, n + 1)), tuple(range(n, 0, -1)))
+
+
+def _take_neighbor_data(f: jax.Array, *idx: jax.Array) -> jax.Array:
+    """Get the values of f on the grid cell containing each query point.
+
+    For n grid dimensions, each query point lies in a cell with 2**n corners
+    (2 in 1D, 2x2 in 2D, 2x2x2 in 3D). This returns f at those corners.
+
+    Parameters
+    ----------
+    f : ndarray, shape(N1, ..., Nn, ...)
+        Values on the grid. The first n axes are the grid axes; any trailing axes
+        (e.g. several fields stacked together) are returned whole.
+    *idx : ndarray, shape(Nq,)
+        One index array per grid axis (i, j, k, ...). The cell of query point q
+        spans [i[q] - 1, i[q]] along the first axis, [j[q] - 1, j[q]] along the
+        second, and so on.
+
+    Returns
+    -------
+    out : ndarray, shape(2, ..., 2, Nq, ...)
+        n axes of size 2 for the cell corners, then the query axis, then the
+        trailing axes of f. For example in 3D, out[a, b, c, q] is
+        f[i[q] - 1 + a, j[q] - 1 + b, k[q] - 1 + c], so out[0, 0, 0] is the
+        lower corner and out[1, 1, 1] the upper corner for every query point.
+
+    Notes
+    -----
+    This uses one batched dynamic_slice instead of indexing f separately for each
+    corner, which compiles to a single gather and is faster when f does not fit
+    in cache.
+    """
+    n = len(idx)
+
+    def take(*start):
+        return jax.lax.dynamic_slice(
+            f,
+            # lower corner of the cell, and the start of any trailing axes
+            tuple(s - 1 for s in start) + (0,) * (f.ndim - n),
+            # 2 points along each grid axis, all of each trailing axis
+            (2,) * n + f.shape[n:],
+        )
+
+    return jax.vmap(take, out_axes=n)(*idx)
 
 
 def _approx_df(
