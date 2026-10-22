@@ -5,6 +5,11 @@ Changelog
 
 v0.3.16
 -------
+- Adds ``RBFInterpolator``, a radial basis function interpolator for scattered data in
+N dimensions with an API matching ``scipy.interpolate.RBFInterpolator``. Supports all
+the scipy kernels, smoothing, and an added polynomial term. Passing ``neighbors``
+builds the interpolant at each query point from only the nearest data points, using a
+KD-tree from the new ``jaxkd`` dependency.
 - Adds ``CubicSmoothingSpline``, a cubic smoothing spline for noisy data. The amount
 of smoothing is set by a normalized parameter ``p`` in [0, 1], as in csaps, and all
 the boundary conditions of ``CubicSpline`` are supported, including periodic.
