@@ -10,7 +10,7 @@ repos:
       - id: trailing-whitespace
   # Keep this in sync with the pin in pyproject.toml.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.7
+    rev: v0.17.3
     hooks:
       - id: ruff-check
         args: ["--fix"]
