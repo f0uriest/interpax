@@ -336,10 +336,11 @@ class PPoly(eqx.Module):
         c2 = self.c.copy()
         for _ in range(nu):
             c2 = jnp.vectorize(jnp.polyint, signature="(n)->(m)")(c2.T).T
-            # need to patch up continuity
+            # need to patch up continuity. c2 has shape (k, m, ...) whatever
+            # self.axis is, so z has the intervals on axis 0.
             dx = jnp.diff(self.x)
             z = jnp.vectorize(jnp.polyval, signature="(n),()->()")(c2.T, dx).T
-            c2 = c2.at[-1, 1:].add(jnp.cumsum(z, axis=self.axis)[:-1])
+            c2 = c2.at[-1, 1:].add(jnp.cumsum(z, axis=0)[:-1])
 
         if self.extrapolate == "periodic":
             extrapolate = False
