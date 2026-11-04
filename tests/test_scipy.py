@@ -262,6 +262,19 @@ class TestPPolyCommon:
             for cls in (PPoly,):
                 assert_raises(ValueError, cls, c=c, x=x, axis=axis)
 
+    def test_antiderivative_integrate_axis(self):
+        np.random.seed(1234)
+        c = np.random.rand(3, 2, 5, 4)
+        xp = np.linspace(-0.2, 1.2, 9)
+        for axis in (0, 1, 2):
+            m = c.shape[axis + 1]
+            x = np.sort(np.random.rand(m + 1))
+            p = PPoly(c, x, axis=axis)
+            p_sp = scipy.interpolate.PPoly(c, x, axis=axis)
+            for nu in (1, 2):
+                assert_allclose(p.antiderivative(nu)(xp), p_sp.antiderivative(nu)(xp))
+            assert_allclose(p.integrate(0.1, 0.8), p_sp.integrate(0.1, 0.8))
+
 
 class TestPolySubclassing:
     class P(PPoly):
