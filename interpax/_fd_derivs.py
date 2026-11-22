@@ -44,6 +44,7 @@ def approx_df(
         out = _cubic1(x, f, axis)
     elif method == "cubic2":
         bc_type = kwargs.get("bc_type", "not-a-knot")
+        axis = axis % f.ndim
         bc, dtype = _validate_bc(bc_type, f.shape[:axis] + f.shape[axis + 1 :], f.dtype)
         out = _cubic2(x, f, axis, bc=bc, dtype=dtype)
     elif method == "cardinal":
