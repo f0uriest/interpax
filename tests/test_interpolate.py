@@ -14,6 +14,7 @@ from interpax import (
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
+    approx_df,
     fft_interp1d,
     fft_interp2d,
     interp1d,
@@ -890,3 +891,22 @@ def test_cubic_smoothing_spline():
         for i, e in enumerate(eps)
     ]
     np.testing.assert_allclose(grad, fd, rtol=1e-3)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bc_type", ["not-a-knot", "natural", "clamped", "periodic"])
+def test_approx_df_cubic2_inside_shard_map(bc_type):
+    """approx_df works inside shard_map when f is mapped and x is not.
+
+    A lineax solve raised "Vector and operator structures do not match" here, since
+    it compares the operator's sharding with the right-hand side's.
+    """
+    x = jnp.log(jnp.geomspace(0.01, 1e3, 64))
+    f = jnp.stack([jnp.sin(k * x) for k in (1.0, 2.0)])
+    if bc_type == "periodic":
+        f = f.at[:, -1].set(f[:, 0])
+    df = jax.vmap(lambda v: approx_df(x, v, "cubic2", 0, bc_type=bc_type))
+    mesh = jax.sharding.Mesh(np.array(jax.devices()[:1]), ("p",))
+    spec = jax.sharding.PartitionSpec("p")
+    sharded = jax.jit(jax.shard_map(df, mesh=mesh, in_specs=spec, out_specs=spec))
+    np.testing.assert_allclose(sharded(f), df(f), rtol=0, atol=1e-12)
