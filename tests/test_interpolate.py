@@ -10,6 +10,7 @@ import pytest
 from jax import config as jax_config
 
 from interpax import (
+    CubicHermiteSpline,
     CubicSmoothingSpline,
     Interpolator1D,
     Interpolator2D,
@@ -937,3 +938,22 @@ def test_approx_df_cubic2_negative_axis(bc_type):
     for axis in [2, -3]:
         with pytest.raises(ValueError):
             approx_df(x, f, "cubic2", axis, bc_type=bc_type)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("derivative", [0, 1, 2, 3])
+@pytest.mark.parametrize("dtype", [jnp.float64, jnp.complex128])
+def test_interp1d_cubic_matches_hermite_spline(derivative, dtype):
+    """interp1d with given fx is the cubic Hermite spline, for every derivative."""
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0, 3, 12))
+    f = rng.normal(size=(12, 3, 2)).astype(dtype)
+    fx = rng.normal(size=(12, 3, 2)).astype(dtype)
+    xq = np.linspace(-0.5, 3.5, 50)
+    out = interp1d(xq, x, f, "cubic", derivative, extrap=True, fx=fx)
+    ref = CubicHermiteSpline(x, f, fx, axis=0)(xq, nu=derivative)
+    np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
+    # a scalar query takes its own indexing path
+    for q, r in [(xq[0], ref[0]), (xq[20], ref[20])]:
+        out = interp1d(q, x, f, "cubic", derivative, extrap=True, fx=fx)
+        np.testing.assert_allclose(out, r, rtol=1e-12, atol=1e-12)

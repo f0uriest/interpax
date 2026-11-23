@@ -1,6 +1,5 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
-import functools
 import itertools
 from typing import Any
 
@@ -11,7 +10,7 @@ import numpy as np
 from jax import jit
 from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
-from ._coefs import A_BICUBIC, A_CUBIC, A_TRICUBIC
+from ._coefs import A_BICUBIC, A_TRICUBIC
 from ._fd_derivs import approx_df
 from .utils import asarray_inexact, errorif, isbool, wrap_jit
 
@@ -663,23 +662,25 @@ def interp1d(
         assert method in CUBIC_METHODS
         assert fx is not None and fx.shape == f.shape
 
-        x0, x1 = x[i - 1], x[i]
+        # A scalar query indexes f with scalars, which XLA does as a slice rather
+        # than a gather: about twice as fast at one point on CPU.
+        xq1, i1 = (xq[0], i[0]) if nq == 0 else (xq, i)
+        x0, x1 = x[i1 - 1], x[i1]
         dx = x1 - x0
-        delta = xq - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
-        t = delta * dxi
+        t = (xq1 - x0) * dxi
 
-        f0, f1 = f[i - 1], f[i]
-        fx0, fx1 = fx[i - 1], fx[i]
-        fx0 = (fx0.T * dx).T
-        fx1 = (fx1.T * dx).T
-
-        F = jnp.stack([f0, f1, fx0, fx1], axis=0).T
-        # full precision, as the default for float32 on some GPUs keeps only ~10 bits
-        matmul = functools.partial(jnp.matmul, precision=jax.lax.Precision.HIGHEST)
-        coef = jnp.vectorize(matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F).T
-        ttx = _get_t_der(t, derivative, dxi)
-        fq = jnp.einsum("ji...,ij->i...", coef, ttx)
+        # Hermite basis weights at each query, computed once and broadcast over the
+        # trailing axes of f rather than forming the coefficients of every cubic.
+        w0, w1, w2, w3 = _hermite_basis(t, derivative, dxi)
+        e = lambda w: w.reshape(w.shape + (1,) * (f.ndim - 1))
+        fq = (
+            e(w0) * f[i1 - 1]
+            + e(w1) * f[i1]
+            + e(w2 * dx) * fx[i1 - 1]
+            + e(w3 * dx) * fx[i1]
+        )
+        fq = fq.reshape((xq.size, *f.shape[1:]))
 
     fq = _extrap(xq, fq, x, lowx, highx)
     return _move_query_axes(fq.reshape(outshape), nq, axis)
@@ -1487,6 +1488,21 @@ def _make_periodic(
                 axis=axis,
             )
     return (xq, x, *arrlist)
+
+
+def _hermite_basis(t: jax.Array, derivative: int, dxi: jax.Array) -> tuple:
+    """Cubic Hermite basis for f0, f1, dx * fx0, dx * fx1, differentiated in x."""
+    t2 = t * t
+    t3 = t2 * t
+    z = jnp.zeros_like(t)
+    d0 = lambda: (2 * t3 - 3 * t2 + 1, 3 * t2 - 2 * t3, t3 - 2 * t2 + t, t3 - t2)
+    d1 = lambda: (6 * t2 - 6 * t, 6 * t - 6 * t2, 3 * t2 - 4 * t + 1, 3 * t2 - 2 * t)
+    d2 = lambda: (12 * t - 6, 6 - 12 * t, 6 * t - 4, 6 * t - 2)
+    d3 = lambda: (z + 12, z - 12, z + 6, z + 6)
+    d4 = lambda: (z, z, z, z)
+    k = jnp.minimum(derivative, 4)
+    w = jax.lax.switch(k, [d0, d1, d2, d3, d4])
+    return tuple(wi * dxi**k for wi in w)
 
 
 @jit
