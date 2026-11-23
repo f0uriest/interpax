@@ -1109,3 +1109,30 @@ def test_interp2d_cubic_mixed_dtypes():
     z32 = y32[:5]
     interp = Interpolator3D(x32, y32, z32, np.ones((10, 9, 5), np.float32), "cubic")
     assert interp(xq, yq, yq % 1).dtype == jnp.float64
+
+
+@pytest.mark.unit
+def test_interp3d_cubic_high_derivative_on_small_float32_cells():
+    """float32 results on small cells stay finite, and zero for zero data.
+
+    The derivative scales of all axes together may overflow where the result does not.
+    """
+    rng = np.random.default_rng(0)
+    grid = np.arange(4) * 1e-5
+    q = np.array([1.3e-5, 1.7e-5])
+    names = ("fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz")
+    for amp in [1e-30, 0.0]:
+        f, *derivs = (amp * rng.normal(size=(4, 4, 4)) for _ in range(8))
+        fields = dict(zip(names, derivs))
+        for derivative in [(3, 3, 3), (3, 3, 2)]:
+            res = []
+            for dtype in (np.float32, np.float64):
+                qq, gg = np.asarray(q, dtype), np.asarray(grid, dtype)
+                kw: dict = {m: jnp.asarray(v, dtype) for m, v in fields.items()}
+                ff = np.asarray(f, dtype)
+                res.append(
+                    interp3d(qq, qq, qq, gg, gg, gg, ff, "cubic", derivative, **kw)
+                )
+            out, ref = res
+            assert out.dtype == jnp.float32
+            np.testing.assert_allclose(out, ref, rtol=1e-3, atol=0)

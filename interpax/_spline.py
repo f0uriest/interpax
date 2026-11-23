@@ -1402,15 +1402,16 @@ def _hermite_cell(
         c0, c1 = jnp.take(corners, 0, axis=a), jnp.take(corners, 1, axis=a)
         corners = jnp.stack([c0, c1 - c0], axis=a)
     # weights of the values and of the derivatives at the two ends of the cell
-    # along each axis, each of shape (2, Nq), and the product of the scales that
-    # _hermite_basis leaves out of them, applied once to the sum
+    # along each axis, each of shape (2, Nq), and the scales that _hermite_basis
+    # leaves out of them, applied to the sum one axis at a time, since their product
+    # alone can overflow in float32 on small cells where the result does not
     w = []
-    scale = jnp.ones_like(ts[0])
+    scales = []
     for t, d, dxi, width in zip(ts, derivatives, dxis, widths):
         _, h1, g0, g1, s = _hermite_basis(t, d, dxi)
         h0 = jnp.where(d <= 0, jnp.ones_like(h1), jnp.zeros_like(h1))
         w.append((jnp.stack([h0, h1]), jnp.stack([(g0 + g1) * width, g1 * width])))
-        scale = scale * s
+        scales.append(s)
     weights = []
     for name in _field_names(n):
         wm = 1
@@ -1421,7 +1422,9 @@ def _hermite_cell(
     W = jnp.stack(weights, axis=-1)
     W = W.reshape(W.shape + (1,) * (corners.ndim - W.ndim))
     fq = jnp.sum(corners * W, axis=(*range(n), n + 1))
-    return scale.reshape(scale.shape + (1,) * (fq.ndim - 1)) * fq
+    for s in scales:
+        fq = s.reshape(s.shape + (1,) * (fq.ndim - 1)) * fq
+    return fq
 
 
 def _take_neighbor_data(f: jax.Array, *idx: jax.Array) -> jax.Array:
