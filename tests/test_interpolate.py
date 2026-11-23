@@ -957,3 +957,14 @@ def test_interp1d_cubic_matches_hermite_spline(derivative, dtype):
     for q, r in [(xq[0], ref[0]), (xq[20], ref[20])]:
         out = interp1d(q, x, f, "cubic", derivative, extrap=True, fx=fx)
         np.testing.assert_allclose(out, r, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.unit
+def test_interp1d_cubic_high_derivative_on_tiny_cell():
+    """Derivatives above the third are zero even where 1/dx**4 overflows."""
+    x = np.array([-1.0, 0.0, 1e-80, 1.0, 2.0])
+    xq = np.array([5e-81, 1.5])
+    for derivative in [4, 5]:
+        out = interp1d(xq, x, x**2, "cubic", derivative)
+        np.testing.assert_array_equal(out, 0)
+        np.testing.assert_array_equal(interp1d(xq[0], x, x**2, "cubic", derivative), 0)

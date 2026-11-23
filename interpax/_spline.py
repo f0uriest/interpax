@@ -1495,14 +1495,19 @@ def _hermite_basis(t: jax.Array, derivative: int, dxi: jax.Array) -> tuple:
     t2 = t * t
     t3 = t2 * t
     z = jnp.zeros_like(t)
+    # each branch is scaled by dxi**derivative itself, so the zero branch stays zero
+    # even where that factor overflows
     d0 = lambda: (2 * t3 - 3 * t2 + 1, 3 * t2 - 2 * t3, t3 - 2 * t2 + t, t3 - t2)
-    d1 = lambda: (6 * t2 - 6 * t, 6 * t - 6 * t2, 3 * t2 - 4 * t + 1, 3 * t2 - 2 * t)
-    d2 = lambda: (12 * t - 6, 6 - 12 * t, 6 * t - 4, 6 * t - 2)
-    d3 = lambda: (z + 12, z - 12, z + 6, z + 6)
+    d1 = lambda: tuple(
+        dxi * w
+        for w in (6 * t2 - 6 * t, 6 * t - 6 * t2, 3 * t2 - 4 * t + 1, 3 * t2 - 2 * t)
+    )
+    d2 = lambda: tuple(
+        dxi**2 * w for w in (12 * t - 6, 6 - 12 * t, 6 * t - 4, 6 * t - 2)
+    )
+    d3 = lambda: tuple(dxi**3 * (z + w) for w in (12, -12, 6, 6))
     d4 = lambda: (z, z, z, z)
-    k = jnp.minimum(derivative, 4)
-    w = jax.lax.switch(k, [d0, d1, d2, d3, d4])
-    return tuple(wi * dxi**k for wi in w)
+    return jax.lax.switch(jnp.clip(derivative, 0, 4), [d0, d1, d2, d3, d4])
 
 
 @jit
