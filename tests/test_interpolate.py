@@ -973,10 +973,7 @@ def test_interp1d_cubic_high_derivative_on_tiny_cell():
 @pytest.mark.unit
 @pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
 def test_interp1d_cubic_half_precision(dtype):
-    """Half precision inputs are interpolated without rounding every Hermite term.
-
-    The reference is the same rounded inputs interpolated in float64.
-    """
+    """Half precision results stay close to the same rounded inputs in float64."""
     rng = np.random.default_rng(0)
     x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 38)]))
     f = np.sin(3 * x) + 0.01 * rng.normal(size=40)
@@ -987,7 +984,7 @@ def test_interp1d_cubic_half_precision(dtype):
         ref = interp1d(xq64, x64, f64, "cubic", derivative)
         assert out.dtype == dtype
         scale = np.max(np.abs(ref))
-        # an empirical bound for this data, with room for other seeds
+        # an empirical bound for this seed; with float16, some other seeds overflow
         np.testing.assert_allclose(out.astype(float), ref, atol=3e-2 * scale)
 
 
