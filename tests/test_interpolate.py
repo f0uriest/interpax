@@ -905,3 +905,11 @@ def test_approx_df_cubic2_negative_axis(bc_type):
         approx_df(x, f, "cubic2", -1, bc_type=bc_type),
         approx_df(x, f.T, "cubic2", 0, bc_type=bc_type).T,
     )
+    if isinstance(bc_type, str):
+        # 1D f with the default axis=-1
+        np.testing.assert_allclose(
+            approx_df(x, f[0], "cubic2", bc_type=bc_type),
+            approx_df(x, f.T, "cubic2", 0, bc_type=bc_type)[:, 0],
+        )
+    with pytest.raises(ValueError):
+        approx_df(x, f, "cubic2", 2, bc_type=bc_type)
