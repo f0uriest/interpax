@@ -911,5 +911,6 @@ def test_approx_df_cubic2_negative_axis(bc_type):
             approx_df(x, f[0], "cubic2", bc_type=bc_type),
             approx_df(x, f.T, "cubic2", 0, bc_type=bc_type)[:, 0],
         )
-    with pytest.raises(ValueError):
-        approx_df(x, f, "cubic2", 2, bc_type=bc_type)
+    for axis in [2, -3]:
+        with pytest.raises(ValueError):
+            approx_df(x, f, "cubic2", axis, bc_type=bc_type)
