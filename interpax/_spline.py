@@ -665,7 +665,10 @@ def interp1d(
         # A scalar query indexes f with scalars, which XLA does as a slice rather
         # than a gather: about twice as fast at one point on CPU.
         xq1, i1 = (xq[0], i[0]) if nq == 0 else (xq, i)
-        x0, x1 = x[i1 - 1], x[i1]
+        # weights and sum in at least float32, as half precision would round every
+        # term; the result is cast back to the dtype of f below
+        wtype = jnp.promote_types(x.dtype, jnp.float32)
+        xq1, x0, x1 = (a.astype(wtype) for a in (xq1, x[i1 - 1], x[i1]))
         dx = x1 - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         t = (xq1 - x0) * dxi
@@ -680,7 +683,7 @@ def interp1d(
             + e(w2 * dx) * fx[i1 - 1]
             + e(w3 * dx) * fx[i1]
         )
-        fq = fq.reshape((xq.size, *f.shape[1:]))
+        fq = fq.reshape((xq.size, *f.shape[1:])).astype(f.dtype)
 
     fq = _extrap(xq, fq, x, lowx, highx)
     return _move_query_axes(fq.reshape(outshape), nq, axis)

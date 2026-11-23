@@ -944,7 +944,7 @@ def test_approx_df_cubic2_negative_axis(bc_type):
 @pytest.mark.parametrize("derivative", [0, 1, 2, 3])
 @pytest.mark.parametrize("dtype", [jnp.float64, jnp.complex128])
 def test_interp1d_cubic_matches_hermite_spline(derivative, dtype):
-    """interp1d with given fx is the cubic Hermite spline, for every derivative."""
+    """interp1d with given fx is the cubic Hermite spline, for derivatives 0 to 3."""
     rng = np.random.default_rng(0)
     x = np.sort(rng.uniform(0, 3, 12))
     f = rng.normal(size=(12, 3, 2)).astype(dtype)
@@ -968,3 +968,23 @@ def test_interp1d_cubic_high_derivative_on_tiny_cell():
         out = interp1d(xq, x, x**2, "cubic", derivative)
         np.testing.assert_array_equal(out, 0)
         np.testing.assert_array_equal(interp1d(xq[0], x, x**2, "cubic", derivative), 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
+def test_interp1d_cubic_half_precision(dtype):
+    """Half precision inputs are interpolated without rounding every Hermite term.
+
+    The reference is the same rounded inputs interpolated in float64.
+    """
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0, 3, 40))
+    f = np.sin(3 * x) + 0.01 * rng.normal(size=40)
+    x, f, xq = (jnp.asarray(a, dtype) for a in (x, f, np.linspace(0.1, 2.9, 2000)))
+    for derivative in [0, 1, 2]:
+        out = interp1d(xq, x, f, "cubic", derivative)
+        xq64, x64, f64 = (a.astype(float) for a in (xq, x, f))
+        ref = interp1d(xq64, x64, f64, "cubic", derivative)
+        assert out.dtype == dtype
+        scale = np.max(np.abs(ref))
+        np.testing.assert_allclose(out.astype(float), ref, atol=1e-2 * scale)
