@@ -1403,8 +1403,7 @@ def _hermite_cell(
         corners = jnp.stack([c0, c1 - c0], axis=a)
     # weights of the values and of the derivatives at the two ends of the cell
     # along each axis, each of shape (2, Nq), and the scales that _hermite_basis
-    # leaves out of them, applied to the sum one axis at a time, since their product
-    # alone can overflow in float32 on small cells where the result does not
+    # leaves out of them
     w = []
     scales = []
     for t, d, dxi, width in zip(ts, derivatives, dxis, widths):
@@ -1422,8 +1421,28 @@ def _hermite_cell(
     W = jnp.stack(weights, axis=-1)
     W = W.reshape(W.shape + (1,) * (corners.ndim - W.ndim))
     fq = jnp.sum(corners * W, axis=(*range(n), n + 1))
+    if jnp.finfo(ts[0].dtype).bits >= 64:
+        # ponytail: one product of the scales, which only overflows or underflows
+        # float64 on cells narrower than about 1e-34 or wider than about 1e34
+        scale = scales[0]
+        for s in scales[1:]:
+            scale = scale * s
+        return scale.reshape(scale.shape + (1,) * (fq.ndim - 1)) * fq
+    # In float32 the scales can differ by many orders of magnitude between axes, so
+    # their product, or the sum times some of them, can overflow or underflow where
+    # the result does not. So the sum is multiplied by the product of their
+    # mantissas, and then by 2**(sum of their exponents) in n + 1 factors of the same
+    # sign, each representable, so each step only grows or only shrinks it.
+    m, e = jnp.ones_like(ts[0]), jnp.zeros(ts[0].shape, jnp.int32)
     for s in scales:
-        fq = s.reshape(s.shape + (1,) * (fq.ndim - 1)) * fq
+        ms, es = jnp.frexp(s)
+        m, e = m * ms, e + es
+    part = jnp.sign(e) * (jnp.abs(e) // (n + 1))
+    factors = [m * jnp.ldexp(jnp.ones_like(m), part)]
+    factors += [jnp.ldexp(jnp.ones_like(m), part)] * (n - 1)
+    factors += [jnp.ldexp(jnp.ones_like(m), e - n * part)]
+    for c in factors:
+        fq = c.reshape(c.shape + (1,) * (fq.ndim - 1)) * fq
     return fq
 
 

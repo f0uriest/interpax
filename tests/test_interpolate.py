@@ -1112,27 +1112,37 @@ def test_interp2d_cubic_mixed_dtypes():
 
 
 @pytest.mark.unit
-def test_interp3d_cubic_high_derivative_on_small_float32_cells():
-    """float32 results on small cells stay finite, and zero for zero data.
+def test_interp3d_cubic_high_derivative_float32_cell_sizes():
+    """float32 results stay finite, and zero for zero data, on small cells.
 
-    The derivative scales of all axes together may overflow where the result does not.
+    The derivative scales of the axes, or some of them, may overflow or underflow
+    where the result does not, also when cells are small along one axis and large
+    along another.
     """
     rng = np.random.default_rng(0)
-    grid = np.arange(4) * 1e-5
-    q = np.array([1.3e-5, 1.7e-5])
     names = ("fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz")
-    for amp in [1e-30, 0.0]:
-        f, *derivs = (amp * rng.normal(size=(4, 4, 4)) for _ in range(8))
-        fields = dict(zip(names, derivs))
-        for derivative in [(3, 3, 3), (3, 3, 2)]:
-            res = []
-            for dtype in (np.float32, np.float64):
-                qq, gg = np.asarray(q, dtype), np.asarray(grid, dtype)
-                kw: dict = {m: jnp.asarray(v, dtype) for m, v in fields.items()}
-                ff = np.asarray(f, dtype)
-                res.append(
-                    interp3d(qq, qq, qq, gg, gg, gg, ff, "cubic", derivative, **kw)
-                )
-            out, ref = res
-            assert out.dtype == jnp.float32
-            np.testing.assert_allclose(out, ref, rtol=1e-3, atol=0)
+    cases = [
+        ((1e-5, 1e-5, 1e-5), (3, 3, 3), 1e-30),
+        ((1e-5, 1e-5, 1e-5), (3, 3, 2), 0.0),
+        ((1e-10, 1e10, 1.0), (3, 3, 0), 1e10),
+        ((1e-6, 1e6, 1.0), (3, 3, 1), 1e22),
+        ((1e10, 1e-12, 1e-8), (3, 2, 2), 1e-10),
+    ]
+    for hs, derivative, amp in cases:
+        grids = [np.arange(4) * h for h in hs]
+        qs = [np.array([1.3, 1.7]) * h for h in hs]
+        f = amp * rng.normal(size=(4, 4, 4))
+        fields = {}
+        for m in names:
+            width = np.prod([hs["xyz".index(c)] for c in m[1:]])
+            fields[m] = amp / width * rng.normal(size=(4, 4, 4))
+        res = []
+        for dtype in (np.float32, np.float64):
+            c = lambda a, dtype=dtype: jnp.asarray(jnp.asarray(a, np.float32), dtype)
+            kw: dict = {m: c(v) for m, v in fields.items()}
+            q, g = [c(a) for a in qs], [c(a) for a in grids]
+            args = (q[0], q[1], q[2], g[0], g[1], g[2], c(f))
+            res.append(interp3d(*args, "cubic", derivative, **kw))
+        out, ref = res
+        assert out.dtype == jnp.float32
+        np.testing.assert_allclose(out, ref, rtol=1e-4, atol=0)
