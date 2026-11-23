@@ -885,7 +885,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
         assert method in CUBIC_METHODS
         # weights and sum in at least float32 and the precision of f and its
         # derivatives, as half precision would round every term; the result is cast
-        # back to their dtype below
+        # back to their dtype, promoted with the knots and queries
         wtype = jnp.promote_types(xtype, jnp.finfo(data.dtype).dtype)
         w = lambda a: a.astype(jnp.promote_types(wtype, jnp.float32))
         x0, x1 = w(x[i - 1]), w(x[i])
@@ -905,7 +905,7 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
             (derivative_x, derivative_y),
             (dxi, dyi),
             (dx, dy),
-        ).astype(data.dtype)
+        ).astype(jnp.result_type(data, xtype))
 
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
@@ -1149,7 +1149,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
         assert method in CUBIC_METHODS
         # weights and sum in at least float32 and the precision of f and its
         # derivatives, as half precision would round every term; the result is cast
-        # back to their dtype below
+        # back to their dtype, promoted with the knots and queries
         wtype = jnp.promote_types(xtype, jnp.finfo(data.dtype).dtype)
         w = lambda a: a.astype(jnp.promote_types(wtype, jnp.float32))
         x0, x1 = w(x[i - 1]), w(x[i])
@@ -1177,7 +1177,7 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
             (derivative_x, derivative_y, derivative_z),
             (dxi, dyi, dzi),
             (dx, dy, dz),
-        ).astype(data.dtype)
+        ).astype(jnp.result_type(data, xtype))
 
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
@@ -1381,8 +1381,9 @@ def _hermite_cell(
         Values of f and its derivatives (in the order of _field_names(n)) at each
         cell corner, as gathered from the output of _stack_fields.
     ts : tuple of ndarray, shape(Nq,)
-        Position of each query in its cell along each axis, normalized to [0, 1].
-    derivatives : tuple of int
+        Position of each query along each axis, in units of the cell width from its
+        left edge; within the cell it is in [0, 1].
+    derivatives : tuple of int or traced int
         Order of the derivative to take along each axis.
     dxis, widths : tuple of ndarray, shape(Nq,)
         Inverse width and width of the cell along each axis.

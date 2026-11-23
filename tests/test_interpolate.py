@@ -1010,6 +1010,7 @@ def test_interp1d_cubic_mixed_dtypes():
     np.testing.assert_allclose(out, ref, atol=1e-9)
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("derivative", [(0, 0, 0), (1, 0, 2), (0, 3, 1), (2, 2, 4)])
 @pytest.mark.parametrize("dtype", [jnp.float64, jnp.complex128])
 def test_interp2d_interp3d_cubic_are_tensor_products(derivative, dtype):
@@ -1101,3 +1102,7 @@ def test_interp2d_cubic_mixed_dtypes():
     ref = interp2d(xq64, yq64, x64, y64, f, "cubic", (1, 1), fx=fx, fy=fy, fxy=fxy)
     assert out.dtype == jnp.float64
     np.testing.assert_allclose(out, ref, atol=1e-9)
+    # float32 values queried in float64 give float64, for Interpolator2D too
+    f32 = f.astype(np.float32)
+    assert Interpolator2D(x, y, f32, "cubic")(xq, yq).dtype == jnp.float64
+    assert interp2d(xq, yq, x, y, f32, "cubic").dtype == jnp.float64
