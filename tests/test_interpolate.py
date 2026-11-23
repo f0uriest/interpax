@@ -894,9 +894,10 @@ def test_cubic_smoothing_spline():
 
 
 @pytest.mark.unit
+@pytest.mark.skipif(not hasattr(jax, "shard_map"), reason="needs jax.shard_map")
 @pytest.mark.parametrize("bc_type", ["not-a-knot", "natural", "clamped", "periodic"])
 def test_approx_df_cubic2_inside_shard_map(bc_type):
-    """approx_df works inside shard_map when f is mapped and x is not.
+    """approx_df works inside shard_map when f is an input and x is closed over.
 
     A lineax solve raised "Vector and operator structures do not match" here, since
     it compares the operator's sharding with the right-hand side's.
