@@ -665,9 +665,12 @@ def interp1d(
         # A scalar query indexes f with scalars, which XLA does as a slice rather
         # than a gather: about twice as fast at one point on CPU.
         xq1, i1 = (xq[0], i[0]) if nq == 0 else (xq, i)
-        # weights and sum in at least float32, as half precision would round every
-        # term; the result is cast back to the dtype of f below
-        wtype = jnp.promote_types(x.dtype, jnp.float32)
+        # Weights in at least float32 and the precision of f, and the sum in that
+        # precision too, as half precision would round every term. The result is
+        # cast back to the dtype of f and fx.
+        dtype = jnp.result_type(f, fx)
+        wtype = jnp.promote_types(x.dtype, jnp.finfo(dtype).dtype)
+        wtype = jnp.promote_types(wtype, jnp.float32)
         xq1, x0, x1 = (a.astype(wtype) for a in (xq1, x[i1 - 1], x[i1]))
         dx = x1 - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
@@ -675,15 +678,16 @@ def interp1d(
 
         # Hermite basis weights at each query, computed once and broadcast over the
         # trailing axes of f rather than forming the coefficients of every cubic.
-        w0, w1, w2, w3 = _hermite_basis(t, derivative, dxi)
+        # The weights of f0 and f1 sum to 1 for the value and to 0 for every
+        # derivative, so f1 - f0 is taken first, which cancels exactly.
+        _, w1, w2, w3 = _hermite_basis(t, derivative, dxi)
         e = lambda w: w.reshape(w.shape + (1,) * (f.ndim - 1))
-        fq = (
-            e(w0) * f[i1 - 1]
-            + e(w1) * f[i1]
-            + e(w2 * dx) * fx[i1 - 1]
-            + e(w3 * dx) * fx[i1]
-        )
-        fq = fq.reshape((xq.size, *f.shape[1:])).astype(f.dtype)
+        ctype = jnp.promote_types(wtype, dtype)
+        f0, f1 = f[i1 - 1].astype(ctype), f[i1].astype(ctype)
+        fx0, fx1 = fx[i1 - 1].astype(ctype), fx[i1].astype(ctype)
+        fq = e(w1) * (f1 - f0) + e(w2 * dx) * fx0 + e(w3 * dx) * fx1
+        fq = jnp.where(derivative <= 0, fq + f0, fq)
+        fq = fq.reshape((xq.size, *f.shape[1:])).astype(dtype)
 
     fq = _extrap(xq, fq, x, lowx, highx)
     return _move_query_axes(fq.reshape(outshape), nq, axis)

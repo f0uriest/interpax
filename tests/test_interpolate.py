@@ -978,7 +978,7 @@ def test_interp1d_cubic_half_precision(dtype):
     The reference is the same rounded inputs interpolated in float64.
     """
     rng = np.random.default_rng(0)
-    x = np.sort(rng.uniform(0, 3, 40))
+    x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 38)]))
     f = np.sin(3 * x) + 0.01 * rng.normal(size=40)
     x, f, xq = (jnp.asarray(a, dtype) for a in (x, f, np.linspace(0.1, 2.9, 2000)))
     for derivative in [0, 1, 2]:
@@ -988,3 +988,24 @@ def test_interp1d_cubic_half_precision(dtype):
         assert out.dtype == dtype
         scale = np.max(np.abs(ref))
         np.testing.assert_allclose(out.astype(float), ref, atol=1e-2 * scale)
+
+
+@pytest.mark.unit
+def test_interp1d_cubic_mixed_dtypes():
+    """The result has the dtype and precision of f and fx, not only of x."""
+    rng = np.random.default_rng(1)
+    x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 18)]))
+    f, fx, g = np.sin(x), np.cos(x), rng.normal(size=20)
+    xq = np.linspace(0, 3, 101)
+    # real f with complex fx keeps the imaginary part of fx
+    out = interp1d(xq, x, f, "cubic", 1, fx=fx + 1j * g)
+    ref = CubicHermiteSpline(x, f, fx, axis=0)(xq, nu=1)
+    ref = ref + 1j * CubicHermiteSpline(x, 0 * f, g, axis=0)(xq, nu=1)
+    assert out.dtype == jnp.complex128
+    np.testing.assert_allclose(out, ref, atol=1e-12)
+    # float32 knots with float64 values keep float64 precision in the weights
+    x32, xq32 = x.astype(np.float32), xq.astype(np.float32)
+    out = interp1d(xq32, x32, f, "cubic", 1, fx=fx)
+    ref = CubicHermiteSpline(x32.astype(float), f, fx, axis=0)(xq32.astype(float), nu=1)
+    assert out.dtype == jnp.float64
+    np.testing.assert_allclose(out, ref, atol=1e-9)
