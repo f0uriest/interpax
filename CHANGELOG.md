@@ -1,6 +1,10 @@
 Changelog
 =========
 
+- Fix ``PPoly.antiderivative`` and ``PPoly.integrate`` returning wrong values when
+``axis != 0``, which also affected all the spline classes derived from ``PPoly``.
+- Fix ``approx_df`` with ``method="cubic2"`` failing for the default ``axis=-1`` when
+``bc_type`` is ``"natural"``, ``"clamped"`` or explicit derivative values.
 
 
 v0.3.16
