@@ -10,6 +10,7 @@ import pytest
 from jax import config as jax_config
 
 from interpax import (
+    CubicHermiteSpline,
     CubicSmoothingSpline,
     Interpolator1D,
     Interpolator2D,
@@ -937,3 +938,72 @@ def test_approx_df_cubic2_negative_axis(bc_type):
     for axis in [2, -3]:
         with pytest.raises(ValueError):
             approx_df(x, f, "cubic2", axis, bc_type=bc_type)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("derivative", [0, 1, 2, 3])
+@pytest.mark.parametrize("dtype", [jnp.float64, jnp.complex128])
+def test_interp1d_cubic_matches_hermite_spline(derivative, dtype):
+    """interp1d with given fx is the cubic Hermite spline, for derivatives 0 to 3."""
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0, 3, 12))
+    f = rng.normal(size=(12, 3, 2)).astype(dtype)
+    fx = rng.normal(size=(12, 3, 2)).astype(dtype)
+    xq = np.linspace(-0.5, 3.5, 50)
+    out = interp1d(xq, x, f, "cubic", derivative, extrap=True, fx=fx)
+    ref = CubicHermiteSpline(x, f, fx, axis=0)(xq, nu=derivative)
+    np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
+    # a scalar query takes its own indexing path
+    for q, r in [(xq[0], ref[0]), (xq[20], ref[20])]:
+        out = interp1d(q, x, f, "cubic", derivative, extrap=True, fx=fx)
+        np.testing.assert_allclose(out, r, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.unit
+def test_interp1d_cubic_high_derivative_on_tiny_cell():
+    """Derivatives above the third are zero even where 1/dx**4 overflows."""
+    x = np.array([-1.0, 0.0, 1e-80, 1.0, 2.0])
+    xq = np.array([5e-81, 1.5])
+    for derivative in [4, 5]:
+        out = interp1d(xq, x, x**2, "cubic", derivative)
+        np.testing.assert_array_equal(out, 0)
+        np.testing.assert_array_equal(interp1d(xq[0], x, x**2, "cubic", derivative), 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
+def test_interp1d_cubic_half_precision(dtype):
+    """Half precision results stay close to the same rounded inputs in float64."""
+    rng = np.random.default_rng(0)
+    x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 38)]))
+    f = np.sin(3 * x) + 0.01 * rng.normal(size=40)
+    x, f, xq = (jnp.asarray(a, dtype) for a in (x, f, np.linspace(0.1, 2.9, 2000)))
+    for derivative in [0, 1, 2]:
+        out = interp1d(xq, x, f, "cubic", derivative)
+        xq64, x64, f64 = (a.astype(float) for a in (xq, x, f))
+        ref = interp1d(xq64, x64, f64, "cubic", derivative)
+        assert out.dtype == dtype
+        scale = np.max(np.abs(ref))
+        # an empirical bound for this seed; with float16, some other seeds overflow
+        np.testing.assert_allclose(out.astype(float), ref, atol=3e-2 * scale)
+
+
+@pytest.mark.unit
+def test_interp1d_cubic_mixed_dtypes():
+    """The result has the dtype and precision of f and fx, not only of x."""
+    rng = np.random.default_rng(1)
+    x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 18)]))
+    f, fx, g = np.sin(x), np.cos(x), rng.normal(size=20)
+    xq = np.linspace(0, 3, 101)
+    # real f with complex fx keeps the imaginary part of fx
+    out = interp1d(xq, x, f, "cubic", 1, fx=fx + 1j * g)
+    ref = CubicHermiteSpline(x, f, fx, axis=0)(xq, nu=1)
+    ref = ref + 1j * CubicHermiteSpline(x, 0 * f, g, axis=0)(xq, nu=1)
+    assert out.dtype == jnp.complex128
+    np.testing.assert_allclose(out, ref, atol=1e-12)
+    # float32 knots with float64 values keep float64 precision in the weights
+    x32, xq32 = x.astype(np.float32), xq.astype(np.float32)
+    out = interp1d(xq32, x32, f, "cubic", 1, fx=fx)
+    ref = CubicHermiteSpline(x32.astype(float), f, fx, axis=0)(xq32.astype(float), nu=1)
+    assert out.dtype == jnp.float64
+    np.testing.assert_allclose(out, ref, atol=1e-9)
