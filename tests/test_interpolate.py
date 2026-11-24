@@ -1102,6 +1102,13 @@ def test_interp2d_cubic_mixed_dtypes():
     ref = interp2d(xq64, yq64, x64, y64, f, "cubic", (1, 1), fx=fx, fy=fy, fxy=fxy)
     assert out.dtype == jnp.float64
     np.testing.assert_allclose(out, ref, atol=1e-9)
+    fz, fxz, fyz, fxyz = (rng.normal(size=(10, 9, 9)) for _ in range(4))
+    f3, fx3, fy3, fxy3 = (np.repeat(a[..., None], 9, -1) for a in (f, fx, fy, fxy))
+    kw: dict = dict(fx=fx3, fy=fy3, fz=fz, fxy=fxy3, fxz=fxz, fyz=fyz, fxyz=fxyz)
+    out = interp3d(xq32, yq32, yq32, x32, y32, y32, f3, "cubic", (1, 1, 0), **kw)
+    ref = interp3d(xq64, yq64, yq64, x64, y64, y64, f3, "cubic", (1, 1, 0), **kw)
+    assert out.dtype == jnp.float64
+    np.testing.assert_allclose(out, ref, atol=1e-9)
     # float32 knots and values queried in float64 give float64, as from interp2d
     f32 = f.astype(np.float32)
     interp = Interpolator2D(x32, y32, f32, "cubic")
