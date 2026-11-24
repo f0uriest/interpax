@@ -14,6 +14,7 @@ from interpax import (
     Interpolator1D,
     Interpolator2D,
     Interpolator3D,
+    approx_df,
     fft_interp1d,
     fft_interp2d,
     interp1d,
@@ -890,3 +891,26 @@ def test_cubic_smoothing_spline():
         for i, e in enumerate(eps)
     ]
     np.testing.assert_allclose(grad, fd, rtol=1e-3)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "bc_type", ["natural", "clamped", ((1, [0.5, -1.0]), "natural")]
+)
+def test_approx_df_cubic2_negative_axis(bc_type):
+    """Boundary values get the shape of f without its interpolation axis."""
+    x = jnp.linspace(0, 1, 10)
+    f = jnp.stack([jnp.sin(x), jnp.cos(x)])
+    np.testing.assert_allclose(
+        approx_df(x, f, "cubic2", -1, bc_type=bc_type),
+        approx_df(x, f.T, "cubic2", 0, bc_type=bc_type).T,
+    )
+    if isinstance(bc_type, str):
+        # 1D f with the default axis=-1
+        np.testing.assert_allclose(
+            approx_df(x, f[0], "cubic2", bc_type=bc_type),
+            approx_df(x, f.T, "cubic2", 0, bc_type=bc_type)[:, 0],
+        )
+    for axis in [2, -3]:
+        with pytest.raises(ValueError):
+            approx_df(x, f, "cubic2", axis, bc_type=bc_type)
