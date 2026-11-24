@@ -894,6 +894,29 @@ def test_cubic_smoothing_spline():
 
 
 @pytest.mark.unit
+@pytest.mark.skipif(not hasattr(jax, "shard_map"), reason="needs jax.shard_map")
+@pytest.mark.parametrize("bc_type", ["not-a-knot", "natural", "clamped", "periodic"])
+def test_approx_df_cubic2_inside_shard_map(bc_type):
+    """approx_df works inside shard_map when f is an input and x is closed over.
+
+    With jax >= 0.8, where f carries the manual mesh sharding inside shard_map, a
+    lineax solve raised "Vector and operator structures do not match" here, since it
+    compares the operator's sharding with the right-hand side's. Older jax doesn't
+    attach that sharding, so there this test can't catch that regression.
+    """
+    x = jnp.log(jnp.geomspace(0.01, 1e3, 64))
+    f = jnp.stack([jnp.sin(k * x) for k in (1.0, 2.0)])
+    if bc_type == "periodic":
+        f = f.at[:, -1].set(f[:, 0])
+    # axis=0 rather than the default -1, which needs the fix in gh PR #211 for natural
+    # and clamped boundary conditions
+    df = jax.vmap(lambda v: approx_df(x, v, "cubic2", axis=0, bc_type=bc_type))
+    mesh = jax.sharding.Mesh(np.array(jax.devices()[:1]), ("p",))
+    spec = jax.sharding.PartitionSpec("p")
+    sharded = jax.jit(jax.shard_map(df, mesh=mesh, in_specs=spec, out_specs=spec))
+    np.testing.assert_allclose(sharded(f), df(f), rtol=0, atol=1e-12)
+
+
 @pytest.mark.parametrize(
     "bc_type", ["natural", "clamped", ((1, [0.5, -1.0]), "natural")]
 )
