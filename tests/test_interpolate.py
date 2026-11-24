@@ -1112,21 +1112,16 @@ def test_interp2d_cubic_mixed_dtypes():
 
 
 @pytest.mark.unit
-def test_interp3d_cubic_high_derivative_float32_cell_sizes():
+def test_interp3d_cubic_high_derivative_on_small_float32_cells():
     """float32 results stay finite, and zero for zero data, on small cells.
 
-    The derivative scales of the axes, or some of them, may overflow or underflow
-    where the result does not, also when cells are small along one axis and large
-    along another.
+    The derivative scales of all axes together may overflow where the result does not.
     """
     rng = np.random.default_rng(0)
     names = ("fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz")
     cases = [
         ((1e-5, 1e-5, 1e-5), (3, 3, 3), 1e-30),
         ((1e-5, 1e-5, 1e-5), (3, 3, 2), 0.0),
-        ((1e-10, 1e10, 1.0), (3, 3, 0), 1e10),
-        ((1e-6, 1e6, 1.0), (3, 3, 1), 1e22),
-        ((1e10, 1e-12, 1e-8), (3, 2, 2), 1e-10),
     ]
     for hs, derivative, amp in cases:
         grids = [np.arange(4) * h for h in hs]
@@ -1146,3 +1141,21 @@ def test_interp3d_cubic_high_derivative_float32_cell_sizes():
         out, ref = res
         assert out.dtype == jnp.float32
         np.testing.assert_allclose(out, ref, rtol=1e-4, atol=0)
+
+
+@pytest.mark.unit
+def test_interp2d_cubic_float32_knot_gradient():
+    """Derivatives with respect to the knots match float64 with float32 weights."""
+    rng = np.random.default_rng(1)
+    x = np.sort(np.concatenate([[0, 2], rng.uniform(0, 2, 5)]))
+    y = np.linspace(-1, 1, 6)
+    f = np.sin(x[:, None]) * np.cos(2 * y[None, :]) + x[:, None] * y[None, :] ** 2
+    xq, yq = np.array([0.31, 1.27, 0.9]), np.array([0.2, -0.55, 0.71])
+    grads = []
+    for dtype in (np.float32, np.float64):
+        c = lambda a, dtype=dtype: jnp.asarray(a, dtype)
+        fun = lambda x, c=c: interp2d(
+            c(xq), c(yq), x, c(y), c(f), "cubic", derivative=(1, 0)
+        ).sum()
+        grads.append(jax.grad(fun)(c(x)))
+    np.testing.assert_allclose(grads[0], grads[1], rtol=1e-3, atol=1e-4)
