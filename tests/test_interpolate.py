@@ -915,3 +915,25 @@ def test_approx_df_cubic2_inside_shard_map(bc_type):
     spec = jax.sharding.PartitionSpec("p")
     sharded = jax.jit(jax.shard_map(df, mesh=mesh, in_specs=spec, out_specs=spec))
     np.testing.assert_allclose(sharded(f), df(f), rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "bc_type", ["natural", "clamped", ((1, [0.5, -1.0]), "natural")]
+)
+def test_approx_df_cubic2_negative_axis(bc_type):
+    """Boundary values get the shape of f without its interpolation axis."""
+    x = jnp.linspace(0, 1, 10)
+    f = jnp.stack([jnp.sin(x), jnp.cos(x)])
+    np.testing.assert_allclose(
+        approx_df(x, f, "cubic2", -1, bc_type=bc_type),
+        approx_df(x, f.T, "cubic2", 0, bc_type=bc_type).T,
+    )
+    if isinstance(bc_type, str):
+        # 1D f with the default axis=-1
+        np.testing.assert_allclose(
+            approx_df(x, f[0], "cubic2", bc_type=bc_type),
+            approx_df(x, f.T, "cubic2", 0, bc_type=bc_type)[:, 0],
+        )
+    for axis in [2, -3]:
+        with pytest.raises(ValueError):
+            approx_df(x, f, "cubic2", axis, bc_type=bc_type)
