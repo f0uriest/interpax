@@ -1,6 +1,8 @@
 Changelog
 =========
 
+- Fix ``PPoly.antiderivative`` and ``PPoly.integrate`` returning wrong values when
+``axis != 0``, which also affected all the spline classes derived from ``PPoly``.
 
 
 v0.3.16
