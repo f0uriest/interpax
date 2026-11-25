@@ -1,5 +1,6 @@
 """Tests for interpolation functions."""
 
+import functools
 import subprocess
 import sys
 
@@ -10,6 +11,7 @@ import pytest
 from jax import config as jax_config
 
 from interpax import (
+    CubicHermiteSpline,
     CubicSmoothingSpline,
     Interpolator1D,
     Interpolator2D,
@@ -937,3 +939,258 @@ def test_approx_df_cubic2_negative_axis(bc_type):
     for axis in [2, -3]:
         with pytest.raises(ValueError):
             approx_df(x, f, "cubic2", axis, bc_type=bc_type)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("derivative", [0, 1, 2, 3])
+@pytest.mark.parametrize("dtype", [jnp.float64, jnp.complex128])
+def test_interp1d_cubic_matches_hermite_spline(derivative, dtype):
+    """interp1d with given fx is the cubic Hermite spline, for derivatives 0 to 3."""
+    rng = np.random.default_rng(0)
+    x = np.sort(rng.uniform(0, 3, 12))
+    f = rng.normal(size=(12, 3, 2)).astype(dtype)
+    fx = rng.normal(size=(12, 3, 2)).astype(dtype)
+    xq = np.linspace(-0.5, 3.5, 50)
+    out = interp1d(xq, x, f, "cubic", derivative, extrap=True, fx=fx)
+    ref = CubicHermiteSpline(x, f, fx, axis=0)(xq, nu=derivative)
+    np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
+    # a scalar query takes its own indexing path
+    for q, r in [(xq[0], ref[0]), (xq[20], ref[20])]:
+        out = interp1d(q, x, f, "cubic", derivative, extrap=True, fx=fx)
+        np.testing.assert_allclose(out, r, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.unit
+def test_interp1d_cubic_high_derivative_on_tiny_cell():
+    """Derivatives above the third are zero even where 1/dx**4 overflows."""
+    x = np.array([-1.0, 0.0, 1e-80, 1.0, 2.0])
+    xq = np.array([5e-81, 1.5])
+    for derivative in [4, 5]:
+        out = interp1d(xq, x, x**2, "cubic", derivative)
+        np.testing.assert_array_equal(out, 0)
+        np.testing.assert_array_equal(interp1d(xq[0], x, x**2, "cubic", derivative), 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
+def test_interp1d_cubic_half_precision(dtype):
+    """Half precision results stay close to the same rounded inputs in float64."""
+    rng = np.random.default_rng(0)
+    x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 38)]))
+    f = np.sin(3 * x) + 0.01 * rng.normal(size=40)
+    x, f, xq = (jnp.asarray(a, dtype) for a in (x, f, np.linspace(0.1, 2.9, 2000)))
+    for derivative in [0, 1, 2]:
+        out = interp1d(xq, x, f, "cubic", derivative)
+        xq64, x64, f64 = (a.astype(float) for a in (xq, x, f))
+        ref = interp1d(xq64, x64, f64, "cubic", derivative)
+        assert out.dtype == dtype
+        scale = np.max(np.abs(ref))
+        # an empirical bound for this seed; with float16, some other seeds overflow
+        np.testing.assert_allclose(out.astype(float), ref, atol=3e-2 * scale)
+
+
+@pytest.mark.unit
+def test_interp1d_cubic_mixed_dtypes():
+    """The result has the dtype and precision of f and fx, not only of x."""
+    rng = np.random.default_rng(1)
+    x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 18)]))
+    f, fx, g = np.sin(x), np.cos(x), rng.normal(size=20)
+    xq = np.linspace(0, 3, 101)
+    # real f with complex fx keeps the imaginary part of fx
+    out = interp1d(xq, x, f, "cubic", 1, fx=fx + 1j * g)
+    ref = CubicHermiteSpline(x, f, fx, axis=0)(xq, nu=1)
+    ref = ref + 1j * CubicHermiteSpline(x, 0 * f, g, axis=0)(xq, nu=1)
+    assert out.dtype == jnp.complex128
+    np.testing.assert_allclose(out, ref, atol=1e-12)
+    # float32 knots with float64 values keep float64 precision in the weights
+    x32, xq32 = x.astype(np.float32), xq.astype(np.float32)
+    out = interp1d(xq32, x32, f, "cubic", 1, fx=fx)
+    ref = CubicHermiteSpline(x32.astype(float), f, fx, axis=0)(xq32.astype(float), nu=1)
+    assert out.dtype == jnp.float64
+    np.testing.assert_allclose(out, ref, atol=1e-9)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("derivative", [(0, 0, 0), (1, 0, 2), (0, 3, 1), (2, 2, 4)])
+@pytest.mark.parametrize("dtype", [jnp.float64, jnp.complex128])
+def test_interp2d_interp3d_cubic_are_tensor_products(derivative, dtype):
+    """With separable data, cubic interp2d/3d are products of 1D Hermite splines."""
+    rng = np.random.default_rng(0)
+    grids = [np.sort(rng.uniform(0, 2, n)) for n in (7, 8, 6)]
+    vals = [rng.normal(size=(len(g), 2)).astype(dtype) for g in grids]
+    ders = [rng.normal(size=(len(g), 2)).astype(dtype) for g in grids]
+    q = [np.linspace(-0.3, 2.3, 30) + 0.01 * k for k in range(3)]
+    # 1D factors for each axis, with its derivative order
+    h = [
+        CubicHermiteSpline(g, v, d, axis=0)(qk, nu=n)
+        for g, v, d, qk, n in zip(grids, vals, ders, q, derivative)
+    ]
+
+    def outer(fields):
+        # the 2D/3D field built from one 1D factor per grid axis
+        return functools.reduce(lambda a, b: a[..., None, :] * b, fields)
+
+    for n, fun in [(2, interp2d), (3, interp3d)]:
+        names = ["f", "fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz"]
+        kw = {}
+        for name in names:
+            axes = "xyz"[:n]
+            if any(c not in axes for c in name[1:]):
+                continue
+            kw[name] = outer(
+                [ders[a] if c in name else vals[a] for a, c in enumerate(axes)]
+            )
+        f = kw.pop("f")
+        out = fun(*q[:n], *grids[:n], f, "cubic", derivative[:n], extrap=True, **kw)
+        ref = functools.reduce(lambda a, b: a * b, h[:n])
+        np.testing.assert_allclose(out, ref, rtol=1e-11, atol=1e-11)
+
+
+@pytest.mark.unit
+def test_interp2d_interp3d_cubic_half_precision():
+    """bfloat16 inputs are interpolated without rounding every Hermite term.
+
+    The reference is the same rounded inputs, derivatives included, interpolated
+    in float64.
+    """
+    rng = np.random.default_rng(0)
+    grids = [np.sort(rng.uniform(0, 3, n)) for n in (12, 11, 10)]
+    q = [rng.uniform(0.1, 2.9, 500) for _ in range(3)]
+    for n, fun in [(2, interp2d), (3, interp3d)]:
+        names = ("fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz")
+        names = [m for m in names if set(m[1:]) <= set("xyz"[:n])]
+        shape = tuple(len(g) for g in grids[:n])
+        half = [jnp.asarray(a, jnp.bfloat16) for a in (*q[:n], *grids[:n])]
+        fields = {m: jnp.asarray(rng.normal(size=shape), jnp.bfloat16) for m in names}
+        f = jnp.asarray(rng.normal(size=shape), jnp.bfloat16)
+        for derivative in [(0,) * n, (1,) + (0,) * (n - 1), (2,) * n]:
+            out = fun(*half, f, "cubic", derivative, extrap=True, **fields)
+            ref = fun(
+                *(a.astype(float) for a in half),
+                f.astype(float),
+                "cubic",
+                derivative,
+                extrap=True,
+                **{m: v.astype(float) for m, v in fields.items()},
+            )
+            assert out.dtype == jnp.bfloat16
+            scale = np.max(np.abs(ref))
+            np.testing.assert_allclose(out.astype(float), ref, atol=6e-3 * scale)
+
+
+@pytest.mark.unit
+def test_interp2d_cubic_mixed_dtypes():
+    """The result keeps the precision of f, its derivatives, the knots and queries."""
+    rng = np.random.default_rng(2)
+    x = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 8)]))
+    y = np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, 7)]))
+    f, fx, fy, fxy, g = (rng.normal(size=(10, 9)) for _ in range(5))
+    xq, yq = rng.uniform(0, 3, (2, 50))
+    # real f with complex fx keeps the imaginary part of fx
+    out = interp2d(xq, yq, x, y, f, "cubic", (1, 0), fx=fx + 1j * g, fy=fy, fxy=fxy)
+    zero = 0 * f
+    ref = interp2d(xq, yq, x, y, f, "cubic", (1, 0), fx=fx, fy=fy, fxy=fxy)
+    ref = ref + 1j * interp2d(
+        xq, yq, x, y, zero, "cubic", (1, 0), fx=g, fy=zero, fxy=zero
+    )
+    assert out.dtype == jnp.complex128
+    np.testing.assert_allclose(out, ref, atol=1e-12)
+    # float32 knots with float64 values keep float64 precision in the weights
+    x32, y32, xq32, yq32 = (a.astype(np.float32) for a in (x, y, xq, yq))
+    x64, y64, xq64, yq64 = (a.astype(float) for a in (x32, y32, xq32, yq32))
+    out = interp2d(xq32, yq32, x32, y32, f, "cubic", (1, 1), fx=fx, fy=fy, fxy=fxy)
+    ref = interp2d(xq64, yq64, x64, y64, f, "cubic", (1, 1), fx=fx, fy=fy, fxy=fxy)
+    assert out.dtype == jnp.float64
+    np.testing.assert_allclose(out, ref, atol=1e-9)
+    fz, fxz, fyz, fxyz = (rng.normal(size=(10, 9, 9)) for _ in range(4))
+    f3, fx3, fy3, fxy3 = (np.repeat(a[..., None], 9, -1) for a in (f, fx, fy, fxy))
+    kw: dict = dict(fx=fx3, fy=fy3, fz=fz, fxy=fxy3, fxz=fxz, fyz=fyz, fxyz=fxyz)
+    out = interp3d(xq32, yq32, yq32, x32, y32, y32, f3, "cubic", (1, 1, 0), **kw)
+    ref = interp3d(xq64, yq64, yq64, x64, y64, y64, f3, "cubic", (1, 1, 0), **kw)
+    assert out.dtype == jnp.float64
+    np.testing.assert_allclose(out, ref, atol=1e-9)
+    # float32 knots and values queried in float64 give float64, as from interp2d
+    f32 = f.astype(np.float32)
+    interp = Interpolator2D(x32, y32, f32, "cubic")
+    assert interp(xq, yq).dtype == jnp.float64
+    z32 = y32[:5]
+    interp = Interpolator3D(x32, y32, z32, np.ones((10, 9, 5), np.float32), "cubic")
+    assert interp(xq, yq, yq % 1).dtype == jnp.float64
+
+
+@pytest.mark.unit
+def test_interp3d_cubic_high_derivative_on_small_float32_cells():
+    """float32 results stay finite, and zero for zero data, on small cells.
+
+    The derivative scales of all axes together may overflow where the result does not.
+    """
+    rng = np.random.default_rng(0)
+    names = ("fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz")
+    cases = [
+        ((1e-5, 1e-5, 1e-5), (3, 3, 3), 1e-30),
+        ((1e-5, 1e-5, 1e-5), (3, 3, 2), 0.0),
+    ]
+    for hs, derivative, amp in cases:
+        grids = [np.arange(4) * h for h in hs]
+        qs = [np.array([1.3, 1.7]) * h for h in hs]
+        f = amp * rng.normal(size=(4, 4, 4))
+        fields = {}
+        for m in names:
+            width = np.prod([hs["xyz".index(c)] for c in m[1:]])
+            fields[m] = amp / width * rng.normal(size=(4, 4, 4))
+        res = []
+        for dtype in (np.float32, np.float64):
+            c = lambda a, dtype=dtype: jnp.asarray(jnp.asarray(a, np.float32), dtype)
+            kw: dict = {m: c(v) for m, v in fields.items()}
+            q, g = [c(a) for a in qs], [c(a) for a in grids]
+            args = (q[0], q[1], q[2], g[0], g[1], g[2], c(f))
+            res.append(interp3d(*args, "cubic", derivative, **kw))
+        out, ref = res
+        assert out.dtype == jnp.float32
+        np.testing.assert_allclose(out, ref, rtol=1e-4, atol=0)
+
+
+@pytest.mark.unit
+def test_interp2d_interp3d_cubic_float32_offset():
+    """A large constant part of f cancels exactly in float32 derivatives.
+
+    The reference is the same rounded inputs interpolated in float64.
+    """
+    rng = np.random.default_rng(0)
+    r = lambda a: np.asarray(np.asarray(a, np.float32), float)
+    grids = [r(np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, n)]))) for n in (8, 7)]
+    grids.append(grids[1])
+    q = [r(rng.uniform(0.1, 2.9, 300)) for _ in range(3)]
+    for n, fun in [(2, interp2d), (3, interp3d)]:
+        names = ("fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz")
+        names = [m for m in names if set(m[1:]) <= set("xyz"[:n])]
+        shape = tuple(len(g) for g in grids[:n])
+        f = r(1e4 + rng.normal(size=shape))
+        fields = {m: r(rng.normal(size=shape)) for m in names}
+        for derivative in [(1,) + (0,) * (n - 1), (2,) * n]:
+            c = lambda a: jnp.asarray(a, jnp.float32)
+            kw: dict = {m: c(v) for m, v in fields.items()}
+            args = [c(a) for a in (*q[:n], *grids[:n], f)]
+            out = fun(*args, "cubic", derivative, **kw)
+            ref = fun(*q[:n], *grids[:n], f, "cubic", derivative, **fields)
+            assert out.dtype == jnp.float32
+            scale = np.max(np.abs(ref))
+            np.testing.assert_allclose(out, ref, atol=1e-5 * scale)
+
+
+@pytest.mark.unit
+def test_interp2d_cubic_float32_knot_gradient():
+    """Derivatives with respect to the knots match float64 with float32 weights."""
+    rng = np.random.default_rng(1)
+    x = np.sort(np.concatenate([[0, 2], rng.uniform(0, 2, 5)]))
+    y = np.linspace(-1, 1, 6)
+    f = np.sin(x[:, None]) * np.cos(2 * y[None, :]) + x[:, None] * y[None, :] ** 2
+    xq, yq = np.array([0.31, 1.27, 0.9]), np.array([0.2, -0.55, 0.71])
+    grads = []
+    for dtype in (np.float32, np.float64):
+        c = lambda a, dtype=dtype: jnp.asarray(a, dtype)
+        fun = lambda x, c=c: interp2d(
+            c(xq), c(yq), x, c(y), c(f), "cubic", derivative=(1, 0)
+        ).sum()
+        grads.append(jax.grad(fun)(c(x)))
+    np.testing.assert_allclose(grads[0], grads[1], rtol=1e-3, atol=1e-4)

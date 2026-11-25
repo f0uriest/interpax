@@ -1,6 +1,5 @@
 """Functions for interpolating splines that are JAX differentiable."""
 
-import functools
 import itertools
 from typing import Any
 
@@ -11,7 +10,6 @@ import numpy as np
 from jax import jit
 from jaxtyping import Array, ArrayLike, Float, Inexact, Num, Real
 
-from ._coefs import A_BICUBIC, A_CUBIC, A_TRICUBIC
 from ._fd_derivs import approx_df
 from .utils import asarray_inexact, errorif, isbool, wrap_jit
 
@@ -663,23 +661,31 @@ def interp1d(
         assert method in CUBIC_METHODS
         assert fx is not None and fx.shape == f.shape
 
-        x0, x1 = x[i - 1], x[i]
+        # A scalar query indexes f with scalars, which XLA does as a slice rather
+        # than a gather: about twice as fast at one point on CPU.
+        xq1, i1 = (xq[0], i[0]) if nq == 0 else (xq, i)
+        # Weights in at least float32 and the precision of f, and the sum in that
+        # precision too, as half precision would round every term. The result is
+        # cast back to the dtype of f and fx, which already includes that of x.
+        dtype = jnp.result_type(f, fx)
+        wtype = jnp.promote_types(x.dtype, jnp.finfo(dtype).dtype)
+        wtype = jnp.promote_types(wtype, jnp.float32)
+        xq1, x0, x1 = (a.astype(wtype) for a in (xq1, x[i1 - 1], x[i1]))
         dx = x1 - x0
-        delta = xq - x0
         dxi = jnp.where(dx == 0, 0, 1 / dx)
-        t = delta * dxi
+        t = (xq1 - x0) * dxi
 
-        f0, f1 = f[i - 1], f[i]
-        fx0, fx1 = fx[i - 1], fx[i]
-        fx0 = (fx0.T * dx).T
-        fx1 = (fx1.T * dx).T
-
-        F = jnp.stack([f0, f1, fx0, fx1], axis=0).T
-        # full precision, as the default for float32 on some GPUs keeps only ~10 bits
-        matmul = functools.partial(jnp.matmul, precision=jax.lax.Precision.HIGHEST)
-        coef = jnp.vectorize(matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F).T
-        ttx = _get_t_der(t, derivative, dxi)
-        fq = jnp.einsum("ji...,ij->i...", coef, ttx)
+        # Hermite basis weights at each query, computed once and broadcast over the
+        # trailing axes of f rather than forming the coefficients of every cubic,
+        # with the common scale applied once to the sum.
+        w0, w1, w2, w3, scale = _hermite_basis(t, derivative, dxi)
+        e = lambda w: w.reshape(w.shape + (1,) * (f.ndim - 1))
+        ctype = jnp.promote_types(wtype, dtype)
+        f0, f1 = f[i1 - 1].astype(ctype), f[i1].astype(ctype)
+        fx0, fx1 = fx[i1 - 1].astype(ctype), fx[i1].astype(ctype)
+        fq = e(w1) * (f1 - f0) + e(w2 * dx) * fx0 + e(w3 * dx) * fx1 + e(w0) * f0
+        fq = e(scale) * fq
+        fq = fq.reshape((xq.size, *f.shape[1:])).astype(dtype)
 
     fq = _extrap(xq, fq, x, lowx, highx)
     return _move_query_axes(fq.reshape(outshape), nq, axis)
@@ -767,6 +773,10 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
     For repeated interpolation given the same x, y, f data, recommend using
     Interpolator2D which caches the calculation of the derivatives and spline
     coefficients.
+
+    With float32 knots and values, derivatives of the cubic methods can overflow or
+    underflow on extreme cell sizes, or on cells whose sizes differ by many orders of
+    magnitude between axes. Use float64 there.
 
     """
     xq, yq, x, y, f = map(asarray_inexact, (xq, yq, x, y, f))
@@ -874,21 +884,9 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     else:
         assert method in CUBIC_METHODS
-        x0, x1 = x[i - 1], x[i]
-        y0, y1 = y[j - 1], y[j]
-        dx = x1 - x0
-        deltax = xq - x0
-        dxi = jnp.where(dx == 0, 0, 1 / dx)
-        tx = deltax * dxi
-        dy = y1 - y0
-        deltay = yq - y0
-        dyi = jnp.where(dy == 0, 0, 1 / dy)
-        ty = deltay * dyi
-
-        coef = _cell_coefficients(_take_neighbor_data(data, i, j), (dx, dy), A_BICUBIC)
-        ttx = _get_t_der(tx, derivative_x, dxi)
-        tty = _get_t_der(ty, derivative_y, dyi)
-        fq = jnp.einsum("ijk...,ij,ik->i...", coef, ttx, tty)
+        fq = _hermite_cell(
+            data, (x, y), (xq, yq), (i, j), (derivative_x, derivative_y), xtype
+        )
 
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
@@ -985,6 +983,10 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
     For repeated interpolation given the same x, y, z, f data, recommend using
     Interpolator3D which caches the calculation of the derivatives and spline
     coefficients.
+
+    With float32 knots and values, derivatives of the cubic methods can overflow or
+    underflow on extreme cell sizes, or on cells whose sizes differ by many orders of
+    magnitude between axes. Use float64 there.
 
     """
     xq, yq, zq, x, y, z, f = map(asarray_inexact, (xq, yq, zq, x, y, z, f))
@@ -1130,32 +1132,14 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     else:
         assert method in CUBIC_METHODS
-        x0, x1 = x[i - 1], x[i]
-        y0, y1 = y[j - 1], y[j]
-        z0, z1 = z[k - 1], z[k]
-
-        dx = x1 - x0
-        deltax = xq - x0
-        dxi = jnp.where(dx == 0, 0, 1 / dx)
-        tx = deltax * dxi
-
-        dy = y1 - y0
-        deltay = yq - y0
-        dyi = jnp.where(dy == 0, 0, 1 / dy)
-        ty = deltay * dyi
-
-        dz = z1 - z0
-        deltaz = zq - z0
-        dzi = jnp.where(dz == 0, 0, 1 / dz)
-        tz = deltaz * dzi
-
-        coef = _cell_coefficients(
-            _take_neighbor_data(data, i, j, k), (dx, dy, dz), A_TRICUBIC
+        fq = _hermite_cell(
+            data,
+            (x, y, z),
+            (xq, yq, zq),
+            (i, j, k),
+            (derivative_x, derivative_y, derivative_z),
+            xtype,
         )
-        ttx = _get_t_der(tx, derivative_x, dxi)
-        tty = _get_t_der(ty, derivative_y, dyi)
-        ttz = _get_t_der(tz, derivative_z, dzi)
-        fq = jnp.einsum("lijk...,li,lj,lk->l...", coef, ttx, tty, ttz)
 
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
@@ -1340,56 +1324,78 @@ def _unstack_fields(fstack: jax.Array, axis: tuple[int, ...]) -> dict:
     }
 
 
-def _cell_coefficients(
-    corners: jax.Array, widths: tuple[jax.Array, ...], A: np.ndarray
+def _hermite_cell(
+    data: jax.Array,
+    knots: tuple[jax.Array, ...],
+    queries: tuple[jax.Array, ...],
+    idx: tuple[jax.Array, ...],
+    derivatives: tuple[int, ...],
+    xtype: Any,
 ) -> jax.Array:
-    """Coefficients of the cubic polynomial on each cell, from its corner values.
+    """Evaluate the cubic Hermite interpolant on each query's cell.
+
+    In n dimensions this is the tensor product of the 1D cubic Hermite basis, so
+    each query needs 2**n weights per field rather than every coefficient of the
+    cell's polynomial.
 
     Parameters
     ----------
-    corners : ndarray, shape(2, ..., 2, Nq, 2**n, ...)
-        Values of f and its derivatives (in the order of _field_names(n)) at each
-        cell corner, as gathered from the output of _stack_fields.
-    widths : tuple of ndarray, shape(Nq,)
-        Width of the cell along each axis.
-    A : ndarray, shape(4**n, 4**n)
-        Matrix mapping corner values to polynomial coefficients.
+    data : ndarray
+        f and its derivatives, in the order of _field_names(n), from _stack_fields.
+    knots, queries : tuple of ndarray
+        Knots and query points along each axis.
+    idx : tuple of ndarray, shape(Nq,)
+        Index of the right end of each query's cell along each axis.
+    derivatives : tuple of int or traced int
+        Order of the derivative to take along each axis.
+    xtype : dtype
+        dtype of the knots and queries, promoted together.
 
     Returns
     -------
-    coef : ndarray, shape(Nq, 4, ..., 4, ...)
-        Coefficient of t1**p1 * ... * tn**pn at index [:, p1, ..., pn].
+    fq : ndarray, shape(Nq, ...)
     """
-    n = len(widths)
-    nq = corners.shape[n]
-    trailing = corners.shape[n + 2 :]
-    # derivatives with respect to the normalized cell coordinates, which are scaled
-    # by the cell width along each differentiated axis
-    width = dict(zip("xyz", widths))
-
-    def field_scale(name):
-        out = jnp.ones_like(widths[0])
-        for a in name[1:]:
-            out = out * width[a]
-        return out
-
-    scale = jnp.stack([field_scale(name) for name in _field_names(n)], axis=-1)
-    corners = corners * scale.reshape(scale.shape + (1,) * len(trailing))
-    # flatten to the order A expects: field, then corner along the last axis down to
-    # the first, i.e. (Nq, field, cn, ..., c1)
-    corners = jnp.moveaxis(
-        corners, (n, n + 1, *range(n - 1, -1, -1)), tuple(range(n + 2))
-    )
-    # full precision, as the default for float32 on some GPUs keeps only ~10 bits
-    coef = jnp.einsum(
-        "ij,qj...->qi...",
-        A,
-        corners.reshape((nq, -1, *trailing)),
-        precision=jax.lax.Precision.HIGHEST,
-    )
-    # coefficient index is p1 + 4 * p2 + ..., so reshape gives (Nq, pn, ..., p1)
-    coef = coef.reshape((nq,) + (4,) * n + trailing)
-    return jnp.moveaxis(coef, tuple(range(1, n + 1)), tuple(range(n, 0, -1)))
+    n = len(knots)
+    # weights and sum in at least float32 and the precision of f and its
+    # derivatives, as half precision would round every term; the result is cast
+    # back to their dtype, promoted with the knots and queries
+    wtype = jnp.promote_types(xtype, jnp.finfo(data.dtype).dtype)
+    wtype = jnp.promote_types(wtype, jnp.float32)
+    corners = _take_neighbor_data(data, *idx)
+    corners = corners.astype(jnp.promote_types(wtype, corners.dtype))
+    # The weights of the values at the two ends of the cell along an axis sum to 1
+    # for the value and to 0 for every derivative, so the corners are differenced
+    # along each axis first, (c0, c1) -> (c0, c1 - c0), which cancels exactly.
+    for a in range(n):
+        c0, c1 = jnp.take(corners, 0, axis=a), jnp.take(corners, 1, axis=a)
+        corners = jnp.stack([c0, c1 - c0], axis=a)
+    # weights of the values and of the derivatives at the two ends of the cell
+    # along each axis, each of shape (2, Nq), and the scales that _hermite_basis
+    # leaves out of them
+    w = []
+    scales = []
+    for x, xq, i, d in zip(knots, queries, idx, derivatives):
+        x0, x1 = x[i - 1].astype(wtype), x[i].astype(wtype)
+        dx = x1 - x0
+        dxi = jnp.where(dx == 0, 0, 1 / dx)
+        h0, h1, g0, g1, s = _hermite_basis((xq.astype(wtype) - x0) * dxi, d, dxi)
+        w.append((jnp.stack([h0, h1]), jnp.stack([(g0 + g1) * dx, g1 * dx])))
+        scales.append(s)
+    weights = []
+    for name in _field_names(n):
+        wm = 1
+        for a, c in enumerate("xyz"[:n]):
+            wa = w[a][c in name]
+            wm = wm * wa.reshape((1,) * a + (2,) + (1,) * (n - 1 - a) + wa.shape[1:])
+        weights.append(wm)
+    W = jnp.stack(weights, axis=-1)
+    W = W.reshape(W.shape + (1,) * (corners.ndim - W.ndim))
+    fq = jnp.sum(corners * W, axis=(*range(n), n + 1))
+    # the scales are applied one axis at a time, since their product alone can
+    # overflow in float32 on small cells where the result does not
+    for s in scales:
+        fq = s.reshape(s.shape + (1,) * (fq.ndim - 1)) * fq
+    return fq.astype(jnp.result_type(data, xtype))
 
 
 def _take_neighbor_data(f: jax.Array, *idx: jax.Array) -> jax.Array:
@@ -1489,20 +1495,28 @@ def _make_periodic(
     return (xq, x, *arrlist)
 
 
-@jit
-def _get_t_der(t: jax.Array, derivative: int, dxi: jax.Array):
-    """Get arrays of [1,t,t^2,t^3] for cubic interpolation."""
-    t0 = jnp.zeros_like(t)
-    t1 = jnp.ones_like(t)
-    dxi = jnp.atleast_1d(dxi)[:, None]
-    # derivatives of monomials
-    d0 = lambda: jnp.array([t1, t, t**2, t**3]).T * dxi**0
-    d1 = lambda: jnp.array([t0, t1, 2 * t, 3 * t**2]).T * dxi
-    d2 = lambda: jnp.array([t0, t0, 2 * t1, 6 * t]).T * dxi**2
-    d3 = lambda: jnp.array([t0, t0, t0, 6 * t1]).T * dxi**3
-    d4 = lambda: jnp.array([t0, t0, t0, t0]).T * (dxi * 0)
+def _hermite_basis(t: jax.Array, derivative: int, dxi: jax.Array) -> tuple:
+    """Cubic Hermite basis for f0, f1 - f0, dx * fx0, dx * fx1, differentiated in x.
 
-    return jax.lax.switch(derivative, [d0, d1, d2, d3, d4])
+    The weights of f0 and f1 sum to 1 for the value and to 0 for every derivative,
+    so with f1 - f0 in place of f1 the weight of f0 is 1 or 0, and f1 - f0 cancels
+    any constant part of f exactly.
+
+    Returns the four weights as polynomials in t and the factor that scales them,
+    dxi**derivative times any common integer factor. Applying the scale once to the
+    sum, rather than to each weight, keeps the terms at the scale of f while they
+    cancel. The scale of the zero weights above the third derivative is 1, so it
+    can't overflow.
+    """
+    t2 = t * t
+    t3 = t2 * t
+    z = jnp.zeros_like(t)
+    d0 = lambda: (z + 1, 3 * t2 - 2 * t3, t3 - 2 * t2 + t, t3 - t2, z + 1)
+    d1 = lambda: (z, 6 * t - 6 * t2, 3 * t2 - 4 * t + 1, 3 * t2 - 2 * t, z + dxi)
+    d2 = lambda: (z, 6 - 12 * t, 6 * t - 4, 6 * t - 2, z + dxi**2)
+    d3 = lambda: (z, z - 2, z + 1, z + 1, 6 * dxi**3 + z)
+    d4 = lambda: (z, z, z, z, z + 1)
+    return jax.lax.switch(jnp.clip(derivative, 0, 4), [d0, d1, d2, d3, d4])
 
 
 def _parse_ndarg(arg: Any, n: int) -> Any | tuple:
