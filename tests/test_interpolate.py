@@ -1151,6 +1151,34 @@ def test_interp3d_cubic_high_derivative_on_small_float32_cells():
 
 
 @pytest.mark.unit
+def test_interp2d_interp3d_cubic_float32_offset():
+    """A large constant part of f cancels exactly in float32 derivatives.
+
+    The reference is the same rounded inputs interpolated in float64.
+    """
+    rng = np.random.default_rng(0)
+    r = lambda a: np.asarray(np.asarray(a, np.float32), float)
+    grids = [r(np.sort(np.concatenate([[0, 3], rng.uniform(0, 3, n)]))) for n in (8, 7)]
+    grids.append(grids[1])
+    q = [r(rng.uniform(0.1, 2.9, 300)) for _ in range(3)]
+    for n, fun in [(2, interp2d), (3, interp3d)]:
+        names = ("fx", "fy", "fz", "fxy", "fxz", "fyz", "fxyz")
+        names = [m for m in names if set(m[1:]) <= set("xyz"[:n])]
+        shape = tuple(len(g) for g in grids[:n])
+        f = r(1e4 + rng.normal(size=shape))
+        fields = {m: r(rng.normal(size=shape)) for m in names}
+        for derivative in [(1,) + (0,) * (n - 1), (2,) * n]:
+            c = lambda a: jnp.asarray(a, jnp.float32)
+            kw: dict = {m: c(v) for m, v in fields.items()}
+            args = [c(a) for a in (*q[:n], *grids[:n], f)]
+            out = fun(*args, "cubic", derivative, **kw)
+            ref = fun(*q[:n], *grids[:n], f, "cubic", derivative, **fields)
+            assert out.dtype == jnp.float32
+            scale = np.max(np.abs(ref))
+            np.testing.assert_allclose(out, ref, atol=1e-5 * scale)
+
+
+@pytest.mark.unit
 def test_interp2d_cubic_float32_knot_gradient():
     """Derivatives with respect to the knots match float64 with float32 weights."""
     rng = np.random.default_rng(1)
