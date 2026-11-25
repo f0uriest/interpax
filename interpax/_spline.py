@@ -676,18 +676,15 @@ def interp1d(
         t = (xq1 - x0) * dxi
 
         # Hermite basis weights at each query, computed once and broadcast over the
-        # trailing axes of f rather than forming the coefficients of every cubic.
-        # The weights of f0 and f1 sum to 1 for the value and to 0 for every
-        # derivative, so f1 - f0 is taken first, which cancels exactly, and the
-        # common scale is applied once to the sum.
-        _, w1, w2, w3, scale = _hermite_basis(t, derivative, dxi)
+        # trailing axes of f rather than forming the coefficients of every cubic,
+        # with the common scale applied once to the sum.
+        w0, w1, w2, w3, scale = _hermite_basis(t, derivative, dxi)
         e = lambda w: w.reshape(w.shape + (1,) * (f.ndim - 1))
         ctype = jnp.promote_types(wtype, dtype)
         f0, f1 = f[i1 - 1].astype(ctype), f[i1].astype(ctype)
         fx0, fx1 = fx[i1 - 1].astype(ctype), fx[i1].astype(ctype)
-        fq = e(w1) * (f1 - f0) + e(w2 * dx) * fx0 + e(w3 * dx) * fx1
+        fq = e(w1) * (f1 - f0) + e(w2 * dx) * fx0 + e(w3 * dx) * fx1 + e(w0) * f0
         fq = e(scale) * fq
-        fq = jnp.where(derivative <= 0, fq + f0, fq)
         fq = fq.reshape((xq.size, *f.shape[1:])).astype(dtype)
 
     fq = _extrap(xq, fq, x, lowx, highx)
@@ -887,29 +884,9 @@ def interp2d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     else:
         assert method in CUBIC_METHODS
-        # weights and sum in at least float32 and the precision of f and its
-        # derivatives, as half precision would round every term; the result is cast
-        # back to their dtype, promoted with the knots and queries
-        wtype = jnp.promote_types(xtype, jnp.finfo(data.dtype).dtype)
-        w = lambda a: a.astype(jnp.promote_types(wtype, jnp.float32))
-        x0, x1 = w(x[i - 1]), w(x[i])
-        y0, y1 = w(y[j - 1]), w(y[j])
-        dx = x1 - x0
-        deltax = w(xq) - x0
-        dxi = jnp.where(dx == 0, 0, 1 / dx)
-        tx = deltax * dxi
-        dy = y1 - y0
-        deltay = w(yq) - y0
-        dyi = jnp.where(dy == 0, 0, 1 / dy)
-        ty = deltay * dyi
-
         fq = _hermite_cell(
-            _take_neighbor_data(data, i, j),
-            (tx, ty),
-            (derivative_x, derivative_y),
-            (dxi, dyi),
-            (dx, dy),
-        ).astype(jnp.result_type(data, xtype))
+            data, (x, y), (xq, yq), (i, j), (derivative_x, derivative_y), xtype
+        )
 
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
@@ -1155,37 +1132,14 @@ def interp3d(  # noqa: C901 - FIXME: break this up into simpler pieces
 
     else:
         assert method in CUBIC_METHODS
-        # weights and sum in at least float32 and the precision of f and its
-        # derivatives, as half precision would round every term; the result is cast
-        # back to their dtype, promoted with the knots and queries
-        wtype = jnp.promote_types(xtype, jnp.finfo(data.dtype).dtype)
-        w = lambda a: a.astype(jnp.promote_types(wtype, jnp.float32))
-        x0, x1 = w(x[i - 1]), w(x[i])
-        y0, y1 = w(y[j - 1]), w(y[j])
-        z0, z1 = w(z[k - 1]), w(z[k])
-
-        dx = x1 - x0
-        deltax = w(xq) - x0
-        dxi = jnp.where(dx == 0, 0, 1 / dx)
-        tx = deltax * dxi
-
-        dy = y1 - y0
-        deltay = w(yq) - y0
-        dyi = jnp.where(dy == 0, 0, 1 / dy)
-        ty = deltay * dyi
-
-        dz = z1 - z0
-        deltaz = w(zq) - z0
-        dzi = jnp.where(dz == 0, 0, 1 / dz)
-        tz = deltaz * dzi
-
         fq = _hermite_cell(
-            _take_neighbor_data(data, i, j, k),
-            (tx, ty, tz),
+            data,
+            (x, y, z),
+            (xq, yq, zq),
+            (i, j, k),
             (derivative_x, derivative_y, derivative_z),
-            (dxi, dyi, dzi),
-            (dx, dy, dz),
-        ).astype(jnp.result_type(data, xtype))
+            xtype,
+        )
 
     fq = _extrap(xq, fq, x, lowx, highx)
     fq = _extrap(yq, fq, y, lowy, highy)
@@ -1371,13 +1325,14 @@ def _unstack_fields(fstack: jax.Array, axis: tuple[int, ...]) -> dict:
 
 
 def _hermite_cell(
-    corners: jax.Array,
-    ts: tuple[jax.Array, ...],
+    data: jax.Array,
+    knots: tuple[jax.Array, ...],
+    queries: tuple[jax.Array, ...],
+    idx: tuple[jax.Array, ...],
     derivatives: tuple[int, ...],
-    dxis: tuple[jax.Array, ...],
-    widths: tuple[jax.Array, ...],
+    xtype: Any,
 ) -> jax.Array:
-    """Evaluate the cubic Hermite interpolant on each cell from its corner values.
+    """Evaluate the cubic Hermite interpolant on each query's cell.
 
     In n dimensions this is the tensor product of the 1D cubic Hermite basis, so
     each query needs 2**n weights per field rather than every coefficient of the
@@ -1385,27 +1340,32 @@ def _hermite_cell(
 
     Parameters
     ----------
-    corners : ndarray, shape(2, ..., 2, Nq, 2**n, ...)
-        Values of f and its derivatives (in the order of _field_names(n)) at each
-        cell corner, as gathered from the output of _stack_fields.
-    ts : tuple of ndarray, shape(Nq,)
-        Position of each query along each axis, in units of the cell width from its
-        left edge; within the cell it is in [0, 1].
+    data : ndarray
+        f and its derivatives, in the order of _field_names(n), from _stack_fields.
+    knots, queries : tuple of ndarray
+        Knots and query points along each axis.
+    idx : tuple of ndarray, shape(Nq,)
+        Index of the right end of each query's cell along each axis.
     derivatives : tuple of int or traced int
         Order of the derivative to take along each axis.
-    dxis, widths : tuple of ndarray, shape(Nq,)
-        Inverse width and width of the cell along each axis.
+    xtype : dtype
+        dtype of the knots and queries, promoted together.
 
     Returns
     -------
     fq : ndarray, shape(Nq, ...)
     """
-    n = len(ts)
+    n = len(knots)
+    # weights and sum in at least float32 and the precision of f and its
+    # derivatives, as half precision would round every term; the result is cast
+    # back to their dtype, promoted with the knots and queries
+    wtype = jnp.promote_types(xtype, jnp.finfo(data.dtype).dtype)
+    wtype = jnp.promote_types(wtype, jnp.float32)
+    corners = _take_neighbor_data(data, *idx)
+    corners = corners.astype(jnp.promote_types(wtype, corners.dtype))
     # The weights of the values at the two ends of the cell along an axis sum to 1
     # for the value and to 0 for every derivative, so the corners are differenced
-    # along each axis first, (c0, c1) -> (c0, c1 - c0), which cancels exactly. The
-    # weights become (w0 + w1, w1).
-    corners = corners.astype(jnp.promote_types(ts[0].dtype, corners.dtype))
+    # along each axis first, (c0, c1) -> (c0, c1 - c0), which cancels exactly.
     for a in range(n):
         c0, c1 = jnp.take(corners, 0, axis=a), jnp.take(corners, 1, axis=a)
         corners = jnp.stack([c0, c1 - c0], axis=a)
@@ -1414,10 +1374,12 @@ def _hermite_cell(
     # leaves out of them
     w = []
     scales = []
-    for t, d, dxi, width in zip(ts, derivatives, dxis, widths):
-        _, h1, g0, g1, s = _hermite_basis(t, d, dxi)
-        h0 = jnp.where(d <= 0, jnp.ones_like(h1), jnp.zeros_like(h1))
-        w.append((jnp.stack([h0, h1]), jnp.stack([(g0 + g1) * width, g1 * width])))
+    for x, xq, i, d in zip(knots, queries, idx, derivatives):
+        x0, x1 = x[i - 1].astype(wtype), x[i].astype(wtype)
+        dx = x1 - x0
+        dxi = jnp.where(dx == 0, 0, 1 / dx)
+        h0, h1, g0, g1, s = _hermite_basis((xq.astype(wtype) - x0) * dxi, d, dxi)
+        w.append((jnp.stack([h0, h1]), jnp.stack([(g0 + g1) * dx, g1 * dx])))
         scales.append(s)
     weights = []
     for name in _field_names(n):
@@ -1433,7 +1395,7 @@ def _hermite_cell(
     # overflow in float32 on small cells where the result does not
     for s in scales:
         fq = s.reshape(s.shape + (1,) * (fq.ndim - 1)) * fq
-    return fq
+    return fq.astype(jnp.result_type(data, xtype))
 
 
 def _take_neighbor_data(f: jax.Array, *idx: jax.Array) -> jax.Array:
@@ -1534,7 +1496,11 @@ def _make_periodic(
 
 
 def _hermite_basis(t: jax.Array, derivative: int, dxi: jax.Array) -> tuple:
-    """Cubic Hermite basis for f0, f1, dx * fx0, dx * fx1, differentiated in x.
+    """Cubic Hermite basis for f0, f1 - f0, dx * fx0, dx * fx1, differentiated in x.
+
+    The weights of f0 and f1 sum to 1 for the value and to 0 for every derivative,
+    so with f1 - f0 in place of f1 the weight of f0 is 1 or 0, and f1 - f0 cancels
+    any constant part of f exactly.
 
     Returns the four weights as polynomials in t and the factor that scales them,
     dxi**derivative times any common integer factor. Applying the scale once to the
@@ -1545,16 +1511,10 @@ def _hermite_basis(t: jax.Array, derivative: int, dxi: jax.Array) -> tuple:
     t2 = t * t
     t3 = t2 * t
     z = jnp.zeros_like(t)
-    d0 = lambda: (2 * t3 - 3 * t2 + 1, 3 * t2 - 2 * t3, t3 - 2 * t2 + t, t3 - t2, z + 1)
-    d1 = lambda: (
-        6 * t2 - 6 * t,
-        6 * t - 6 * t2,
-        3 * t2 - 4 * t + 1,
-        3 * t2 - 2 * t,
-        z + dxi,
-    )
-    d2 = lambda: (12 * t - 6, 6 - 12 * t, 6 * t - 4, 6 * t - 2, z + dxi**2)
-    d3 = lambda: (z + 2, z - 2, z + 1, z + 1, 6 * dxi**3 + z)
+    d0 = lambda: (z + 1, 3 * t2 - 2 * t3, t3 - 2 * t2 + t, t3 - t2, z + 1)
+    d1 = lambda: (z, 6 * t - 6 * t2, 3 * t2 - 4 * t + 1, 3 * t2 - 2 * t, z + dxi)
+    d2 = lambda: (z, 6 - 12 * t, 6 * t - 4, 6 * t - 2, z + dxi**2)
+    d3 = lambda: (z, z - 2, z + 1, z + 1, 6 * dxi**3 + z)
     d4 = lambda: (z, z, z, z, z + 1)
     return jax.lax.switch(jnp.clip(derivative, 0, 4), [d0, d1, d2, d3, d4])
 
